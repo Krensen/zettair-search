@@ -25,7 +25,7 @@ ZET_INDEX = os.environ.get(
 ZET_PORT        = int(os.environ.get("ZET_PORT", "8765"))
 ZET_CLICK_PRIOR = os.environ.get("ZET_CLICK_PRIOR",
     os.path.join(os.path.dirname(__file__), "../zettair/wikipedia/click_prior.bin"))
-ZET_CLICK_ALPHA = os.environ.get("ZET_CLICK_ALPHA", "1.5")
+ZET_CLICK_ALPHA = os.environ.get("ZET_CLICK_ALPHA", "0.5")
 
 # Query + click log
 _log_dir = os.path.join(os.path.dirname(__file__), "logs")
