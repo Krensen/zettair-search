@@ -3,6 +3,7 @@ Zettair Search Web Service
 FastAPI wrapper around the zet CLI with async queuing.
 """
 import asyncio
+import bisect
 import json
 import os
 import re
@@ -40,8 +41,9 @@ async def _append_log(path: str, record: dict):
 
 # Sidecar data paths (alongside the XML source)
 _wiki_dir = os.path.join(os.path.dirname(__file__), "../zettair/wikipedia")
-SNIPPETS_PATH = os.environ.get("ZET_SNIPPETS", os.path.join(_wiki_dir, "simplewiki_snippets.json"))
-IMAGES_PATH   = os.environ.get("ZET_IMAGES",   os.path.join(_wiki_dir, "simplewiki_images.json"))
+SNIPPETS_PATH    = os.environ.get("ZET_SNIPPETS",    os.path.join(_wiki_dir, "simplewiki_snippets.json"))
+IMAGES_PATH      = os.environ.get("ZET_IMAGES",      os.path.join(_wiki_dir, "simplewiki_images.json"))
+AUTOSUGGEST_PATH = os.environ.get("ZET_AUTOSUGGEST", os.path.join(_wiki_dir, "autosuggest.json"))
 
 app = FastAPI(title="Zettair Search Service")
 
@@ -51,6 +53,7 @@ _lock = asyncio.Lock()
 # Sidecar data loaded at startup
 _snippets: dict = {}
 _images: dict = {}
+_autosuggest: list = []   # sorted list of (query, count) tuples
 
 
 @app.on_event("startup")
@@ -71,6 +74,15 @@ async def load_sidecars():
         print(f"  Loaded {len(_images):,} images", flush=True)
     else:
         print(f"WARNING: images file not found: {IMAGES_PATH}")
+
+    global _autosuggest
+    if os.path.exists(AUTOSUGGEST_PATH):
+        print(f"Loading autosuggest from {AUTOSUGGEST_PATH}...", flush=True)
+        with open(AUTOSUGGEST_PATH, encoding="utf-8") as f:
+            _autosuggest = [tuple(x) for x in json.load(f)]
+        print(f"  Loaded {len(_autosuggest):,} suggestions", flush=True)
+    else:
+        print(f"WARNING: autosuggest file not found: {AUTOSUGGEST_PATH}")
 
 
 def parse_zet_output(output: str) -> dict:
@@ -156,6 +168,34 @@ async def run_zet(query: str, n: int) -> dict:
         stdout, stderr = await proc.communicate(input=(query + "\n").encode())
 
     return parse_zet_output(stdout.decode("utf-8", errors="replace"))
+
+
+@app.get("/suggest")
+async def suggest(
+    q: str = Query(..., description="Query prefix"),
+    n: int = Query(8, ge=1, le=20),
+):
+    """Return autosuggest results for a query prefix."""
+    prefix = q.strip().lower()
+    if len(prefix) < 2 or not _autosuggest:
+        return {"q": q, "suggestions": []}
+
+    # Binary search: find first entry >= prefix
+    keys = [x[0] for x in _autosuggest]  # sorted query strings
+    lo = bisect.bisect_left(keys, prefix)
+
+    # Collect all entries that start with the prefix
+    candidates = []
+    i = lo
+    while i < len(_autosuggest) and _autosuggest[i][0].startswith(prefix):
+        candidates.append(_autosuggest[i])
+        i += 1
+
+    # Sort by count descending, take top n
+    candidates.sort(key=lambda x: -x[1])
+    suggestions = [{"query": q, "count": c} for q, c in candidates[:n]]
+
+    return {"q": q, "suggestions": suggestions}
 
 
 @app.get("/search")

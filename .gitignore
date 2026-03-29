@@ -5,3 +5,4 @@ mockups.html
 logs/
 logs/.gitkeep
 logs/*.jsonl
+extract_queries.py
