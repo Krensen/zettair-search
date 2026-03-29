@@ -29,16 +29,21 @@ In-ranker means the click prior competes fairly against BM25 term weights from t
 ## Scoring Formula
 
 ```
-final_weight = bm25_weight × (1.0 + α × log(1.0 + click_prior[docno]))
+score += r_dt × w_t × r_qt × click_boost(docno)
 ```
 
 Where:
-- `bm25_weight` — Zettair's existing accumulated BM25 score (sum of term contributions)
-- `click_prior[docno]` — decayed click score for this document (float, ≥ 0)
-- `α` — tuning parameter, default **0.3**
-- `log` — natural log, dampens the effect so blockbusters don't dominate
+- `r_dt` — BM25 TF component (term frequency normalised by doc length)
+- `w_t` — IDF weight (inverse document frequency)  
+- `r_qt` — query term frequency normalisation
+- `click_boost(docno)` = `1.0 + α × log(1.0 + click_prior[docno])`
 
-The multiplication happens in the **`post()` function** in `okapi.c`, after all term weights have been accumulated for each document. This is the cleanest injection point — it touches the final score, not the per-term accumulation.
+This mirrors exactly how IDF works — a **per-term, inline, multiplicative** factor applied on every term contribution. The click prior scales every BM25 term contribution for that document, so:
+
+- A document with high clicks AND good term matches gets boosted on every term accumulation
+- Documents with zero clicks return `click_boost = 1.0` — identical to current behaviour
+- Threshold pruning sees the boosted scores from the very first accumulator comparison, so popular documents survive pruning that pure BM25 would have discarded
+- α controls the strength: 0.0 = pure BM25, 0.3 = light boost, 1.0+ = popularity dominates
 
 ---
 
@@ -64,14 +69,22 @@ Size:   256,534 × 4 bytes = ~1MB
 
 ### 2. C patch: `okapi.c`
 
-**Two changes only:**
+**Three additions only:**
 
-**a) Global prior array (top of file, after includes):**
+**a) Global prior array + inline helper (top of file, after includes):**
 ```c
+#include <math.h>
+
 /* Click prior — loaded from click_prior.bin at startup */
 static float *g_click_prior = NULL;
 static unsigned int g_click_prior_len = 0;
 static double g_click_alpha = 0.3;
+
+static inline double click_boost(unsigned long int docno) {
+    if (g_click_prior && docno < g_click_prior_len && g_click_prior[docno] > 0.0f)
+        return 1.0 + g_click_alpha * log(1.0 + (double)g_click_prior[docno]);
+    return 1.0;
+}
 
 void okapi_load_prior(const char *path, double alpha) {
     FILE *f = fopen(path, "rb");
@@ -79,6 +92,7 @@ void okapi_load_prior(const char *path, double alpha) {
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
     rewind(f);
+    free(g_click_prior);  /* safe to call on NULL */
     g_click_prior_len = sz / sizeof(float);
     g_click_prior = malloc(sz);
     if (g_click_prior) fread(g_click_prior, sizeof(float), g_click_prior_len, f);
@@ -87,36 +101,31 @@ void okapi_load_prior(const char *path, double alpha) {
 }
 ```
 
-**b) `post()` function — multiply accumulated weight by prior:**
+**b) `METRIC_PER_DOC` — six occurrences, same one-line change each:**
+
+Every `METRIC_PER_DOC` block in `or_decode`, `or_decode_offsets`, `and_decode`, `and_decode_offsets`, `thresh_decode`, `thresh_decode_offsets` contains:
+
 ```c
-static enum search_ret post(struct index *idx, struct query *query,
-  struct search_acc_cons *acc, int opts, struct index_search_opt *opt) {
+/* BEFORE */
+(acc->acc.weight) += r_dt * w_t * r_qt;
 
-    while (acc) {
-        assert(acc->acc.docno < docmap_entries(idx->map));
-
-        /* Apply click prior if loaded */
-        if (g_click_prior && acc->acc.docno < g_click_prior_len) {
-            float prior = g_click_prior[acc->acc.docno];
-            acc->acc.weight *= (1.0 + g_click_alpha * log(1.0 + prior));
-        }
-
-        acc = acc->next;
-    }
-    return SEARCH_OK;
-}
+/* AFTER */
+(acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 ```
 
-**c) `okapi_load_prior()` called from `main.c` / `zet.c`** at startup, before any queries, passing path via env var `ZET_CLICK_PRIOR`.
+That's the entire patch to the scoring logic — one inline function call added to each of six identical lines.
+
+**c) `okapi_load_prior()` called from `zet.c`** at startup, before any queries:
+```c
+/* In zet.c main(), after index is opened: */
+const char *prior_path = getenv("ZET_CLICK_PRIOR");
+double alpha = getenv("ZET_CLICK_ALPHA") ? atof(getenv("ZET_CLICK_ALPHA")) : 0.3;
+if (prior_path) okapi_load_prior(prior_path, alpha);
+```
 
 ### 3. Hot-swap
 
-`click_prior.bin` is loaded once at startup into a malloc'd array. When new clickstream data arrives (monthly), the refresh script:
-1. Rebuilds `click_prior.bin`
-2. Sends `SIGUSR1` to the `zet` process
-3. Signal handler calls `okapi_load_prior()` again (free old array, malloc new one)
-
-For our use case (subprocess-per-query model in `server.py`), hot-swap isn't needed — each `zet` invocation is a fresh process. Just rebuild the file and it's picked up automatically.
+For our subprocess-per-query model in `server.py`, hot-swap isn't needed — each `zet` invocation is a fresh process that loads `click_prior.bin` at startup. When new clickstream data arrives monthly, the refresh script rebuilds `click_prior.bin` and it's picked up automatically on the next query.
 
 ### 4. `docno_map.tsv` — mapping Zettair internal IDs to titles
 
