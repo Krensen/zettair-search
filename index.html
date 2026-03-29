@@ -470,13 +470,14 @@
     if (q) doSearch(q);
   });
 
-  resultsQuery.addEventListener('input', () => {
-    clearTimeout(debounceTimer);
-    const q = resultsQuery.value.trim();
-    if (!q) { resultsMeta.textContent = ''; resultsList.innerHTML = ''; knowledgePanel.innerHTML = ''; return; }
-    if (q.length < 2) return;
-    debounceTimer = setTimeout(() => doSearch(q, true), 300);
-  });
+  // Instant search disabled — uncomment to re-enable
+  // resultsQuery.addEventListener('input', () => {
+  //   clearTimeout(debounceTimer);
+  //   const q = resultsQuery.value.trim();
+  //   if (!q) { resultsMeta.textContent = ''; resultsList.innerHTML = ''; knowledgePanel.innerHTML = ''; return; }
+  //   if (q.length < 2) return;
+  //   debounceTimer = setTimeout(() => doSearch(q, true), 300);
+  // });
 
   document.getElementById('logoBack').addEventListener('click', () => {
     resultsPage.style.display = 'none';
