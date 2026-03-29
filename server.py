@@ -3,13 +3,12 @@ Zettair Search Web Service
 FastAPI wrapper around the zet CLI with async queuing.
 """
 import asyncio
+import json
 import os
 import re
-from typing import Optional
 
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 # --- Config (env vars with sensible defaults) ---
 ZET_BINARY = os.environ.get(
@@ -18,44 +17,62 @@ ZET_BINARY = os.environ.get(
 )
 ZET_INDEX = os.environ.get(
     "ZET_INDEX",
-    os.path.join(os.path.dirname(__file__), "../zettair/testindex/index"),
+    os.path.join(os.path.dirname(__file__), "../zettair/wikiindex/index"),
 )
 ZET_PORT = int(os.environ.get("ZET_PORT", "8765"))
+
+# Sidecar data paths (alongside the XML source)
+_wiki_dir = os.path.join(os.path.dirname(__file__), "../zettair/wikipedia")
+SNIPPETS_PATH = os.environ.get("ZET_SNIPPETS", os.path.join(_wiki_dir, "simplewiki_snippets.json"))
+IMAGES_PATH   = os.environ.get("ZET_IMAGES",   os.path.join(_wiki_dir, "simplewiki_images.json"))
 
 app = FastAPI(title="Zettair Search Service")
 
 # Serialize access to the zet subprocess
 _lock = asyncio.Lock()
 
+# Sidecar data loaded at startup
+_snippets: dict = {}
+_images: dict = {}
+
+
+@app.on_event("startup")
+async def load_sidecars():
+    global _snippets, _images
+    if os.path.exists(SNIPPETS_PATH):
+        print(f"Loading snippets from {SNIPPETS_PATH}...", flush=True)
+        with open(SNIPPETS_PATH, encoding="utf-8") as f:
+            _snippets = json.load(f)
+        print(f"  Loaded {len(_snippets):,} snippets", flush=True)
+    else:
+        print(f"WARNING: snippets file not found: {SNIPPETS_PATH}")
+
+    if os.path.exists(IMAGES_PATH):
+        print(f"Loading images from {IMAGES_PATH}...", flush=True)
+        with open(IMAGES_PATH, encoding="utf-8") as f:
+            _images = json.load(f)
+        print(f"  Loaded {len(_images):,} images", flush=True)
+    else:
+        print(f"WARNING: images file not found: {IMAGES_PATH}")
+
 
 def parse_zet_output(output: str) -> dict:
     """
     Parse zet stdout into structured results.
-
-    Example output:
-      > 1. Chapter 36, Paragraph 25 (score 5.959397, docid 773)
-      > "It's a white whale..."
-      > 2. Chapter 131, Paragraph 4 (score 5.547001, docid 2460)
-      > "Hast seen the White Whale?"
-      > 25 results of 852 shown (took 0.000617 seconds)
-      > > 677 microseconds querying (excluding loading/unloading)
     """
     results = []
     total = 0
     took_ms = None
 
-    # Regex for result header line
     header_re = re.compile(
         r"^(\d+)\.\s+(.*?)\s+\(score\s+([\d.]+),\s+docid\s+(\d+)\)"
     )
-    # Regex for summary line
     summary_re = re.compile(r"^(\d+) results of (\d+) shown \(took ([\d.]+) seconds\)")
 
     lines = output.splitlines()
     i = 0
     while i < len(lines):
         raw = lines[i]
-        # Strip the "> " prompt prefix that appears on the first result and summary lines
         line = raw[2:] if raw.startswith("> ") else raw
         line = line.strip()
 
@@ -65,20 +82,18 @@ def parse_zet_output(output: str) -> dict:
             title = m.group(2).strip()
             score = float(m.group(3))
             docid = int(m.group(4))
-            # Next line is the snippet (no prefix)
-            snippet = ""
+            # Zettair's own snippet (fallback)
+            zet_snippet = ""
             if i + 1 < len(lines):
-                snippet = lines[i + 1].strip().strip('"')
+                zet_snippet = lines[i + 1].strip().strip('"')
                 i += 1
-            results.append(
-                {
-                    "rank": rank,
-                    "score": score,
-                    "docid": docid,
-                    "title": title,
-                    "snippet": snippet,
-                }
-            )
+            results.append({
+                "rank": rank,
+                "score": score,
+                "docid": docid,
+                "title": title,
+                "zet_snippet": zet_snippet,
+            })
             i += 1
             continue
 
@@ -90,6 +105,22 @@ def parse_zet_output(output: str) -> dict:
         i += 1
 
     return {"total": total, "took_ms": took_ms, "results": results}
+
+
+def enrich_results(results: list) -> list:
+    """Attach snippets and images from sidecar data."""
+    enriched = []
+    for r in results:
+        docno = r["title"]  # title from zet output is the DOCNO
+        enriched.append({
+            "rank": r["rank"],
+            "score": r["score"],
+            "docid": r["docid"],
+            "docno": docno,
+            "snippet": _snippets.get(docno) or r["zet_snippet"],
+            "image_url": _images.get(docno),
+        })
+    return enriched
 
 
 async def run_zet(query: str, n: int) -> dict:
@@ -118,18 +149,19 @@ async def search(
     if not q.strip():
         return JSONResponse({"error": "Empty query"}, status_code=400)
     parsed = await run_zet(q.strip(), n)
+    results = enrich_results(parsed["results"])
     return {
         "query": q,
         "total": parsed["total"],
         "took_ms": parsed["took_ms"],
-        "results": parsed["results"],
+        "results": results,
     }
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
     html_path = os.path.join(os.path.dirname(__file__), "index.html")
-    with open(html_path) as f:
+    with open(html_path, encoding="utf-8") as f:
         return f.read()
 
 

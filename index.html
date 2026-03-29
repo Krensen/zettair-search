@@ -9,11 +9,12 @@
 
     body {
       font-family: arial, sans-serif;
-      color: #202124;
       background: #fff;
+      color: #202124;
+      min-height: 100vh;
     }
 
-    /* ── HOMEPAGE (pre-search) ── */
+    /* ── HOMEPAGE ── */
     #home {
       display: flex;
       flex-direction: column;
@@ -62,7 +63,6 @@
       padding: 0.55rem 1rem;
       gap: 0.5rem;
       background: #fff;
-      box-shadow: none;
       transition: box-shadow 0.2s, border-color 0.2s;
     }
 
@@ -101,7 +101,6 @@
     .search-buttons button:hover {
       border-color: #dadce0;
       box-shadow: 0 1px 1px rgba(0,0,0,.1);
-      color: #202124;
     }
 
     /* ── RESULTS PAGE ── */
@@ -116,22 +115,22 @@
       flex-wrap: wrap;
     }
 
-    .results-header .logo-small {
+    .logo-small {
       font-size: 1.75rem;
       font-weight: 400;
       letter-spacing: -0.5px;
       flex-shrink: 0;
-      text-decoration: none;
       cursor: pointer;
+      text-decoration: none;
     }
 
-    .results-header .logo-small span:nth-child(1) { color: #4285f4; }
-    .results-header .logo-small span:nth-child(2) { color: #ea4335; }
-    .results-header .logo-small span:nth-child(3) { color: #fbbc05; }
-    .results-header .logo-small span:nth-child(4) { color: #4285f4; }
-    .results-header .logo-small span:nth-child(5) { color: #34a853; }
-    .results-header .logo-small span:nth-child(6) { color: #ea4335; }
-    .results-header .logo-small span:nth-child(7) { color: #4285f4; }
+    .logo-small span:nth-child(1) { color: #4285f4; }
+    .logo-small span:nth-child(2) { color: #ea4335; }
+    .logo-small span:nth-child(3) { color: #fbbc05; }
+    .logo-small span:nth-child(4) { color: #4285f4; }
+    .logo-small span:nth-child(5) { color: #34a853; }
+    .logo-small span:nth-child(6) { color: #ea4335; }
+    .logo-small span:nth-child(7) { color: #4285f4; }
 
     .results-search-box {
       flex: 1;
@@ -160,13 +159,17 @@
       background: transparent;
     }
 
-    .results-search-box button {
-      background: none;
-      border: none;
-      cursor: pointer;
-      color: #4285f4;
-      padding: 0.2rem;
+    /* Animated search icon when loading */
+    .results-search-box .search-icon {
+      flex-shrink: 0;
+      color: #9aa0a6;
+      transition: color 0.2s;
     }
+    .results-search-box.loading .search-icon {
+      color: #4285f4;
+      animation: pulse 0.8s ease-in-out infinite alternate;
+    }
+    @keyframes pulse { from { opacity: 0.4; } to { opacity: 1; } }
 
     .results-body {
       max-width: 652px;
@@ -178,21 +181,65 @@
       font-size: 0.85rem;
       color: #70757a;
       padding: 0.5rem 0 1rem;
+      min-height: 2rem;
     }
 
+    /* ── KNOWLEDGE PANEL ── */
+    .knowledge-panel {
+      display: flex;
+      gap: 1.2rem;
+      background: #f8f9fa;
+      border: 1px solid #e8eaed;
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+      max-width: 600px;
+    }
+
+    .knowledge-panel img {
+      width: 120px;
+      height: 120px;
+      object-fit: cover;
+      border-radius: 6px;
+      flex-shrink: 0;
+    }
+
+    .knowledge-panel-text h3 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #202124;
+      margin-bottom: 0.4rem;
+    }
+
+    .knowledge-panel-text a {
+      color: #1a0dab;
+      text-decoration: none;
+      font-size: 1.1rem;
+      font-weight: 600;
+    }
+
+    .knowledge-panel-text a:hover { text-decoration: underline; }
+
+    .knowledge-panel-text p {
+      font-size: 0.875rem;
+      color: #4d5156;
+      line-height: 1.55;
+    }
+
+    /* ── RESULT ITEMS ── */
     .result-item {
       margin-bottom: 1.75rem;
       max-width: 600px;
     }
 
-    .result-title {
-      font-size: 1.1rem;
-      color: #1a0dab;
-      font-weight: 400;
-      line-height: 1.3;
-      margin-bottom: 0.2rem;
-      cursor: default;
+    .result-item-inner {
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      align-items: flex-start;
     }
+
+    .result-item-content { flex: 1; min-width: 0; }
 
     .result-url {
       font-size: 0.8rem;
@@ -203,15 +250,23 @@
       gap: 0.3rem;
     }
 
-    .result-url .domain {
-      color: #202124;
-      font-size: 0.85rem;
-    }
-
     .result-url .score-pill {
       font-size: 0.72rem;
       color: #70757a;
     }
+
+    .result-title {
+      font-size: 1.1rem;
+      color: #1a0dab;
+      font-weight: 400;
+      line-height: 1.3;
+      margin-bottom: 0.35rem;
+      text-decoration: none;
+      display: block;
+    }
+
+    .result-title:hover { text-decoration: underline; }
+    .result-title:visited { color: #609; }
 
     .result-snippet {
       font-size: 0.875rem;
@@ -219,22 +274,27 @@
       line-height: 1.58;
     }
 
-    .spinner {
-      display: none;
-      width: 22px; height: 22px;
-      border: 3px solid #ebebeb;
-      border-top-color: #4285f4;
-      border-radius: 50%;
-      animation: spin 0.7s linear infinite;
-      margin: 3rem auto;
+    /* Thumbnail on result card */
+    .result-thumb {
+      width: 64px;
+      height: 64px;
+      object-fit: cover;
+      border-radius: 4px;
+      flex-shrink: 0;
+      margin-top: 2px;
     }
-
-    @keyframes spin { to { transform: rotate(360deg); } }
 
     .no-results {
       padding: 2rem 0;
       color: #70757a;
       font-size: 0.95rem;
+    }
+
+    @media (max-width: 600px) {
+      .results-body { margin-left: 1rem; padding-right: 1rem; }
+      .knowledge-panel { flex-direction: column; }
+      .knowledge-panel img { width: 100%; height: 180px; }
+      .result-thumb { width: 48px; height: 48px; }
     }
   </style>
 </head>
@@ -243,7 +303,7 @@
 <!-- HOME PAGE -->
 <div id="home">
   <div class="top-nav">Hugh's Search</div>
-  <div class="logo" aria-label="Zettair">
+  <div class="logo">
     <span>Z</span><span>e</span><span>t</span><span>t</span><span>a</span><span>i</span><span>r</span>
   </div>
   <form class="search-wrap" id="homeForm">
@@ -251,7 +311,7 @@
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
       </svg>
-      <input type="text" id="homeQuery" autocomplete="off" autofocus />
+      <input type="text" id="homeQuery" autocomplete="off" autofocus placeholder="Search Wikipedia…" />
     </div>
     <div class="search-buttons">
       <button type="submit">Zettair Search</button>
@@ -262,50 +322,67 @@
 <!-- RESULTS PAGE -->
 <div id="results-page">
   <div class="results-header">
-    <div class="logo-small" id="logoBack" role="button" tabindex="0">
+    <div class="logo-small" id="logoBack">
       <span>Z</span><span>e</span><span>t</span><span>t</span><span>a</span><span>i</span><span>r</span>
     </div>
     <form class="results-search-box" id="resultsForm">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9aa0a6" stroke-width="2">
+      <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
       </svg>
-      <input type="text" id="resultsQuery" />
-      <button type="submit">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-        </svg>
-      </button>
+      <input type="text" id="resultsQuery" autocomplete="off" />
     </form>
   </div>
 
   <div class="results-body">
     <div class="results-meta" id="resultsMeta"></div>
-    <div class="spinner" id="spinner"></div>
+    <div id="knowledgePanel"></div>
     <div id="resultsList"></div>
   </div>
 </div>
 
 <script>
-  const homePage = document.getElementById('home');
-  const resultsPage = document.getElementById('results-page');
-  const homeQuery = document.getElementById('homeQuery');
-  const resultsQuery = document.getElementById('resultsQuery');
-  const resultsMeta = document.getElementById('resultsMeta');
-  const resultsList = document.getElementById('resultsList');
-  const spinner = document.getElementById('spinner');
+  const homePage        = document.getElementById('home');
+  const resultsPage     = document.getElementById('results-page');
+  const homeQuery       = document.getElementById('homeQuery');
+  const resultsQuery    = document.getElementById('resultsQuery');
+  const resultsMeta     = document.getElementById('resultsMeta');
+  const resultsList     = document.getElementById('resultsList');
+  const knowledgePanel  = document.getElementById('knowledgePanel');
+  const resultsForm     = document.getElementById('resultsForm');
+  const resultsSearchBox = resultsForm.closest ? resultsForm : resultsForm.parentElement;
 
+  let debounceTimer = null;
+  let currentController = null;
+
+  // ── HOME: submit only ──
   document.getElementById('homeForm').addEventListener('submit', e => {
     e.preventDefault();
     const q = homeQuery.value.trim();
     if (q) doSearch(q);
   });
 
-  document.getElementById('resultsForm').addEventListener('submit', e => {
+  // ── RESULTS: submit ──
+  resultsForm.addEventListener('submit', e => {
     e.preventDefault();
     const q = resultsQuery.value.trim();
     if (q) doSearch(q);
   });
 
+  // ── RESULTS: instant search (debounced, results page only) ──
+  resultsQuery.addEventListener('input', () => {
+    clearTimeout(debounceTimer);
+    const q = resultsQuery.value.trim();
+    if (!q) {
+      resultsMeta.textContent = '';
+      resultsList.innerHTML = '';
+      knowledgePanel.innerHTML = '';
+      return;
+    }
+    if (q.length < 2) return;
+    debounceTimer = setTimeout(() => doSearch(q, true), 300);
+  });
+
+  // ── LOGO: back to home ──
   document.getElementById('logoBack').addEventListener('click', () => {
     resultsPage.style.display = 'none';
     homePage.style.display = 'flex';
@@ -313,47 +390,98 @@
     homeQuery.focus();
   });
 
-  async function doSearch(q) {
+  async function doSearch(q, isInstant = false) {
+    // Cancel in-flight request
+    if (currentController) currentController.abort();
+    currentController = new AbortController();
+
     // Switch to results view
     homePage.style.display = 'none';
     resultsPage.style.display = 'block';
     resultsQuery.value = q;
-    resultsMeta.textContent = '';
-    resultsList.innerHTML = '';
-    spinner.style.display = 'block';
+
+    // Show loading state
+    resultsForm.classList.add('loading');
 
     try {
-      const res = await fetch(`/search?q=${encodeURIComponent(q)}&n=25`);
+      const res = await fetch(`/search?q=${encodeURIComponent(q)}&n=25`, {
+        signal: currentController.signal
+      });
       const data = await res.json();
-      spinner.style.display = 'none';
+
+      resultsForm.classList.remove('loading');
 
       if (!data.results || data.results.length === 0) {
-        resultsList.innerHTML = '<div class="no-results">No results found for <strong>' + escHtml(q) + '</strong>.</div>';
+        resultsMeta.textContent = 'No results found.';
+        resultsList.innerHTML = '';
+        knowledgePanel.innerHTML = '';
         return;
       }
 
       resultsMeta.textContent = `About ${data.total.toLocaleString()} results (${data.took_ms} ms)`;
 
-      resultsList.innerHTML = data.results.map(r => `
-        <div class="result-item">
-          <div class="result-url">
-            <span class="domain">zettair.local</span>
-            <span class="result-url"> › </span>
-            <span class="score-pill">score ${r.score.toFixed(3)} · doc #${r.docid}</span>
-          </div>
-          <div class="result-title">${escHtml(r.title)}</div>
-          <div class="result-snippet">${escHtml(r.snippet)}</div>
-        </div>
-      `).join('');
+      // Knowledge panel — top result if it has an image
+      const top = data.results[0];
+      if (top.image_url) {
+        const title = formatTitle(top.docno);
+        const wikiUrl = `https://simple.wikipedia.org/wiki/${encodeURIComponent(top.docno)}`;
+        knowledgePanel.innerHTML = `
+          <div class="knowledge-panel">
+            <img src="${escHtml(top.image_url)}" alt="${escHtml(title)}"
+                 onerror="this.closest('.knowledge-panel').style.display='none'">
+            <div class="knowledge-panel-text">
+              <a href="${escHtml(wikiUrl)}" target="_blank" rel="noopener noreferrer">${escHtml(title)}</a>
+              <p>${escHtml(top.snippet || '')}</p>
+            </div>
+          </div>`;
+      } else {
+        knowledgePanel.innerHTML = '';
+      }
+
+      // Result list
+      resultsList.innerHTML = data.results.map((r, idx) => {
+        const title = formatTitle(r.docno);
+        const wikiUrl = `https://simple.wikipedia.org/wiki/${encodeURIComponent(r.docno)}`;
+        const thumbHtml = r.image_url
+          ? `<img class="result-thumb" src="${escHtml(r.image_url)}" alt=""
+               onerror="this.style.display='none'">`
+          : '';
+        return `
+          <div class="result-item">
+            <div class="result-item-inner">
+              <div class="result-item-content">
+                <div class="result-url">
+                  <span>simple.wikipedia.org</span>
+                  <span class="result-url"> › </span>
+                  <span class="score-pill">score ${r.score.toFixed(3)}</span>
+                </div>
+                <a class="result-title" href="${escHtml(wikiUrl)}"
+                   target="_blank" rel="noopener noreferrer">${escHtml(title)}</a>
+                <div class="result-snippet">${escHtml(r.snippet || '')}</div>
+              </div>
+              ${thumbHtml}
+            </div>
+          </div>`;
+      }).join('');
 
     } catch (err) {
-      spinner.style.display = 'none';
-      resultsList.innerHTML = '<div class="no-results">Something went wrong: ' + escHtml(err.message) + '</div>';
+      if (err.name === 'AbortError') return; // cancelled — ignore
+      resultsForm.classList.remove('loading');
+      resultsMeta.textContent = '';
+      resultsList.innerHTML = `<div class="no-results">Something went wrong: ${escHtml(err.message)}</div>`;
     }
   }
 
+  function formatTitle(docno) {
+    return (docno || '').replace(/_/g, ' ').replace(/\s*\(.*?\)\s*$/, '').trim();
+  }
+
   function escHtml(s) {
-    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    return String(s)
+      .replace(/&/g,'&amp;')
+      .replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;');
   }
 </script>
 </body>
