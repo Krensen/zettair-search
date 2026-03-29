@@ -31,19 +31,32 @@
 
     #home .logo {
       margin-top: 15vh;
-      margin-bottom: 1.75rem;
+      margin-bottom: 0.5rem;
       font-size: 4.5rem;
       font-weight: 400;
-      letter-spacing: -1px;
+      font-family: Georgia, 'Times New Roman', serif;
+      font-style: italic;
+      letter-spacing: -2px;
+      color: #202124;
     }
 
-    #home .logo span:nth-child(1) { color: #4285f4; }
-    #home .logo span:nth-child(2) { color: #ea4335; }
-    #home .logo span:nth-child(3) { color: #fbbc05; }
-    #home .logo span:nth-child(4) { color: #4285f4; }
-    #home .logo span:nth-child(5) { color: #34a853; }
-    #home .logo span:nth-child(6) { color: #ea4335; }
-    #home .logo span:nth-child(7) { color: #4285f4; }
+    /* Paul Smith signature stripe — under home logo only */
+    #home .logo-stripe {
+      display: flex;
+      width: 340px;
+      height: 4px;
+      margin-bottom: 1.75rem;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    #home .logo-stripe span { flex: 1; }
+    #home .logo-stripe span:nth-child(1) { background: #e8222a; }
+    #home .logo-stripe span:nth-child(2) { background: #f26522; }
+    #home .logo-stripe span:nth-child(3) { background: #f9a825; }
+    #home .logo-stripe span:nth-child(4) { background: #8bc34a; }
+    #home .logo-stripe span:nth-child(5) { background: #26c6da; }
+    #home .logo-stripe span:nth-child(6) { background: #1565c0; }
+    #home .logo-stripe span:nth-child(7) { background: #6a1b9a; }
 
     .search-wrap {
       display: flex;
@@ -115,23 +128,40 @@
       flex-wrap: wrap;
     }
 
+    .logo-small-wrap {
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      cursor: pointer;
+    }
+
     .logo-small {
       font-size: 1.75rem;
       font-weight: 400;
+      font-family: Georgia, 'Times New Roman', serif;
+      font-style: italic;
       letter-spacing: -0.5px;
-      flex-shrink: 0;
-      cursor: pointer;
+      color: #202124;
       text-decoration: none;
-      padding-bottom: 2px;
+      line-height: 1;
     }
 
-    .logo-small span:nth-child(1) { color: #4285f4; }
-    .logo-small span:nth-child(2) { color: #ea4335; }
-    .logo-small span:nth-child(3) { color: #fbbc05; }
-    .logo-small span:nth-child(4) { color: #4285f4; }
-    .logo-small span:nth-child(5) { color: #34a853; }
-    .logo-small span:nth-child(6) { color: #ea4335; }
-    .logo-small span:nth-child(7) { color: #4285f4; }
+    /* Tiny stripe under the small logo on results page */
+    .logo-small-stripe {
+      display: flex;
+      height: 3px;
+      margin-top: 3px;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .logo-small-stripe span { flex: 1; }
+    .logo-small-stripe span:nth-child(1) { background: #e8222a; }
+    .logo-small-stripe span:nth-child(2) { background: #f26522; }
+    .logo-small-stripe span:nth-child(3) { background: #f9a825; }
+    .logo-small-stripe span:nth-child(4) { background: #8bc34a; }
+    .logo-small-stripe span:nth-child(5) { background: #26c6da; }
+    .logo-small-stripe span:nth-child(6) { background: #1565c0; }
+    .logo-small-stripe span:nth-child(7) { background: #6a1b9a; }
 
     .results-search-box {
       flex: 1;
@@ -402,8 +432,9 @@
 <!-- HOME PAGE -->
 <div id="home">
   <div class="top-nav">Hugh's Search</div>
-  <div class="logo">
-    <span>Z</span><span>e</span><span>t</span><span>t</span><span>a</span><span>i</span><span>r</span>
+  <div class="logo">Zettair</div>
+  <div class="logo-stripe">
+    <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
   </div>
   <form class="search-wrap" id="homeForm">
     <div class="suggest-wrap">
@@ -424,8 +455,11 @@
 <!-- RESULTS PAGE -->
 <div id="results-page">
   <div class="results-header">
-    <div class="logo-small" id="logoBack">
-      <span>Z</span><span>e</span><span>t</span><span>t</span><span>a</span><span>i</span><span>r</span>
+    <div class="logo-small-wrap" id="logoBack">
+      <div class="logo-small">Zettair</div>
+      <div class="logo-small-stripe">
+        <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+      </div>
     </div>
     <div class="suggest-wrap" style="flex:1;max-width:584px;">
       <form class="results-search-box" id="resultsForm">
@@ -479,7 +513,7 @@
   //   debounceTimer = setTimeout(() => doSearch(q, true), 300);
   // });
 
-  document.getElementById('logoBack').addEventListener('click', () => {
+  document.getElementById('logoBack').addEventListener('click', (e) => {
     resultsPage.style.display = 'none';
     homePage.style.display = 'flex';
     homeQuery.value = '';
