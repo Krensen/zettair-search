@@ -22,7 +22,10 @@ ZET_INDEX = os.environ.get(
     "ZET_INDEX",
     os.path.join(os.path.dirname(__file__), "../zettair/wikiindex/index"),
 )
-ZET_PORT = int(os.environ.get("ZET_PORT", "8765"))
+ZET_PORT        = int(os.environ.get("ZET_PORT", "8765"))
+ZET_CLICK_PRIOR = os.environ.get("ZET_CLICK_PRIOR",
+    os.path.join(os.path.dirname(__file__), "../zettair/wikipedia/click_prior.bin"))
+ZET_CLICK_ALPHA = os.environ.get("ZET_CLICK_ALPHA", "1.5")
 
 # Query + click log
 _log_dir = os.path.join(os.path.dirname(__file__), "logs")
@@ -154,6 +157,11 @@ def enrich_results(results: list) -> list:
 
 async def run_zet(query: str, n: int) -> dict:
     """Run zet as a subprocess, parse and return results."""
+    env = os.environ.copy()
+    if os.path.exists(ZET_CLICK_PRIOR):
+        env["ZET_CLICK_PRIOR"] = ZET_CLICK_PRIOR
+        env["ZET_CLICK_ALPHA"] = ZET_CLICK_ALPHA
+
     async with _lock:
         proc = await asyncio.create_subprocess_exec(
             ZET_BINARY,
@@ -164,6 +172,7 @@ async def run_zet(query: str, n: int) -> dict:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
         stdout, stderr = await proc.communicate(input=(query + "\n").encode())
 
