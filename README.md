@@ -155,7 +155,7 @@ This opens a browser. Authorise your domain. A cert is saved to `~/.cloudflared/
 cloudflared tunnel create zettair-search
 ```
 
-Note the **tunnel ID** printed (e.g. `c34ed65f-88f8-48b1-88ea-45792e51a5a6`). Credentials are saved to `~/.cloudflared/<tunnel-id>.json`.
+Note the **tunnel ID** printed (e.g. `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`). Credentials are saved to `~/.cloudflared/<tunnel-id>.json`.
 
 ### 8c. Create the config file
 
