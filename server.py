@@ -7,8 +7,9 @@ import json
 import os
 import re
 
+import urllib.request
 from fastapi import FastAPI, Query
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 # --- Config (env vars with sensible defaults) ---
 ZET_BINARY = os.environ.get(
@@ -156,6 +157,25 @@ async def search(
         "took_ms": parsed["took_ms"],
         "results": results,
     }
+
+
+@app.get("/img")
+async def image_proxy(url: str = Query(...)):
+    """Proxy Wikimedia images to avoid browser-side rate limiting."""
+    if not url.startswith("https://upload.wikimedia.org/"):
+        return Response(status_code=403)
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "ZettairSearch/1.0 (https://search.hughwilliams.com)",
+            "Referer": "https://search.hughwilliams.com/",
+        })
+        with urllib.request.urlopen(req, timeout=8) as r:
+            data = r.read()
+            content_type = r.headers.get("Content-Type", "image/jpeg")
+        return Response(content=data, media_type=content_type,
+                        headers={"Cache-Control": "public, max-age=86400"})
+    except Exception:
+        return Response(status_code=404)
 
 
 @app.get("/", response_class=HTMLResponse)
