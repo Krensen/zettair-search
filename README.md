@@ -10,8 +10,9 @@ A full-text BM25 search engine over Simple English Wikipedia, running locally on
 
 - **Search engine:** Zettair (BM25/Okapi), patched for Apple Silicon
 - **Backend:** FastAPI Python server wrapping the `zet` CLI
-- **Frontend:** Single-file Google-style HTML/JS UI with instant search, knowledge panel, and image thumbnails proxied from Wikimedia
+- **Frontend:** Single-file Google-style HTML/JS UI with Paul Smith styling, autosuggest, knowledge panel, image thumbnails
 - **Data:** Simple English Wikipedia (~256k articles, ~64k images)
+- **Autosuggest:** 152k queries derived from Wikipedia clickstream (15 months, decay-weighted)
 - **Tunnel:** Cloudflare named tunnel → permanent public HTTPS URL
 
 ---
@@ -21,8 +22,8 @@ A full-text BM25 search engine over Simple English Wikipedia, running locally on
 - macOS (Apple Silicon or Intel)
 - Homebrew
 - A Cloudflare account with your domain's nameservers pointed at Cloudflare
-- ~5GB free disk space (XML dump + index)
-- ~30 min for indexing
+- ~12GB free disk space (XML dump + index + clickstream files)
+- ~60 min for full setup (most of it is downloads)
 
 ---
 
@@ -70,11 +71,7 @@ cd ~/search/zettair/devel
 make
 ```
 
-Binary will be at `~/search/zettair/devel/zet`. Test it:
-
-```bash
-echo "test" | ./zet --help
-```
+Binary will be at `~/search/zettair/devel/zet`.
 
 ---
 
@@ -101,12 +98,13 @@ cd ~/search/zettair/wikipedia
 python3 wiki2trec.py
 ```
 
-This reads `simplewiki.xml` and produces:
+Produces:
 - `simplewiki.trec` — Zettair input format
 - `simplewiki_snippets.json` — clean prose snippets per article
 - `simplewiki_images.json` — Wikimedia CDN image URLs per article
+- `simplewiki_titles.txt` — article title list (used by autosuggest pipeline)
 
-Takes ~5–10 minutes. You'll see progress every 5000 articles.
+Takes ~5–10 minutes.
 
 ---
 
@@ -119,11 +117,45 @@ cd ~/search/zettair/wikiindex
 ../devel/zet -i -f index ../wikipedia/simplewiki.trec
 ```
 
-Takes ~5 minutes. Produces `index.*` files in the `wikiindex/` directory.
+Takes ~5 minutes. Produces `index.*` files in `wikiindex/`.
 
 ---
 
-## Step 7 — Run the search server
+## Step 7 — Download Wikipedia clickstream data (autosuggest)
+
+This gives you real search popularity data for 256k articles.
+
+```bash
+cd ~/search/zettair/wikipedia
+
+# Download 15 months of English Wikipedia clickstream (~6.5GB total)
+# Do these sequentially to avoid Wikimedia rate limiting
+for month in 2024-01 2024-02 2024-03 2024-04 2024-05 2024-06 \
+             2024-07 2024-08 2024-09 2024-10 2024-11 2024-12 \
+             2025-01 2025-02 2025-03; do
+  f="clickstream-enwiki-${month}.tsv.gz"
+  echo "Downloading $month..."
+  curl -O "https://dumps.wikimedia.org/other/clickstream/${month}/${f}"
+  sleep 2
+done
+```
+
+Takes ~30–45 minutes depending on your connection.
+
+---
+
+## Step 8 — Build autosuggest index
+
+```bash
+cd ~/search/zettair/wikipedia
+python3 build_autosuggest.py
+```
+
+Produces `autosuggest.json` — 152k query+popularity pairs, sorted for binary search. Takes ~10 minutes (processes all 15 months with decay weighting).
+
+---
+
+## Step 9 — Run the search server
 
 ```bash
 cd ~/search/zettair-search
@@ -135,13 +167,13 @@ python3 server.py
 
 Test locally: http://localhost:8765
 
-The server loads both sidecar JSON files into memory on startup (~5 seconds).
+The server loads snippets, images, and autosuggest into memory on startup (~10 seconds).
 
 ---
 
-## Step 8 — Set up Cloudflare Tunnel (permanent public URL)
+## Step 10 — Set up Cloudflare Tunnel (permanent public URL)
 
-### 8a. Log in to Cloudflare
+### 10a. Log in to Cloudflare
 
 ```bash
 cloudflared tunnel login
@@ -149,15 +181,15 @@ cloudflared tunnel login
 
 This opens a browser. Authorise your domain. A cert is saved to `~/.cloudflared/cert.pem`.
 
-### 8b. Create the tunnel
+### 10b. Create the tunnel
 
 ```bash
 cloudflared tunnel create zettair-search
 ```
 
-Note the **tunnel ID** printed (e.g. `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`). Credentials are saved to `~/.cloudflared/<tunnel-id>.json`.
+Note the **tunnel ID** printed. Credentials saved to `~/.cloudflared/<tunnel-id>.json`.
 
-### 8c. Create the config file
+### 10c. Create the config file
 
 ```bash
 cat > ~/.cloudflared/config.yml << EOF
@@ -171,21 +203,13 @@ ingress:
 EOF
 ```
 
-### 8d. Add the DNS record
+### 10d. Add the DNS record
 
 ```bash
 cloudflared tunnel route dns zettair-search search.yourdomain.com
 ```
 
-This creates a CNAME in Cloudflare DNS automatically.
-
-### 8e. Start the tunnel
-
-```bash
-cloudflared tunnel run zettair-search
-```
-
-### 8f. Run tunnel as a background service (auto-start on boot)
+### 10e. Run tunnel as a background service
 
 ```bash
 sudo cloudflared service install
@@ -196,9 +220,7 @@ Your search engine is now live at `https://search.yourdomain.com`.
 
 ---
 
-## Step 9 — Auto-start the search server on boot
-
-Create a launchd agent so the server starts automatically:
+## Step 11 — Auto-start the search server on boot
 
 ```bash
 cat > ~/Library/LaunchAgents/com.zettair.search.plist << EOF
@@ -234,8 +256,25 @@ cat > ~/Library/LaunchAgents/com.zettair.search.plist << EOF
 </plist>
 EOF
 
-# Replace YOUR_USERNAME, then load it:
+# Replace YOUR_USERNAME throughout, then:
 launchctl load ~/Library/LaunchAgents/com.zettair.search.plist
+```
+
+---
+
+## Step 12 — Set up monthly clickstream refresh (auto-updates autosuggest)
+
+A cron job checks for new clickstream data from the 10th of each month, downloads it, rebuilds `autosuggest.json` automatically.
+
+Configure this via your OpenClaw instance:
+```
+Run daily from 10th: python3 ~/search/zettair/wikipedia/refresh_clickstream.py
+```
+
+Or add a crontab entry:
+```bash
+# Runs daily at 6am from the 10th–28th of each month
+0 6 10-28 * * python3 /Users/YOUR_USERNAME/search/zettair/wikipedia/refresh_clickstream.py
 ```
 
 ---
@@ -245,10 +284,13 @@ launchctl load ~/Library/LaunchAgents/com.zettair.search.plist
 | Tag | Description |
 |-----|-------------|
 | `checkpoint-0` | Working engine, basic UI |
-| `checkpoint-1` | Snippets, images, instant search, clickable links |
-| `checkpoint-1b` | Google-style result cards (current) |
+| `checkpoint-1` | Snippets, images, clickable links |
+| `checkpoint-1b` | Google-style result cards |
+| `checkpoint-2` | Query + click logging, daily digest |
+| `checkpoint-3` | Autosuggest live |
+| `checkpoint-4` | Paul Smith styling, multi-month clickstream, PRD-006 ← current |
 
-Roll back with: `git checkout checkpoint-0`
+Roll back with: `git checkout checkpoint-X`
 
 ---
 
@@ -256,9 +298,11 @@ Roll back with: `git checkout checkpoint-0`
 
 ```
 zettair-search/
-  server.py          ← FastAPI server (image proxy, sidecar loading, zet wrapper)
+  server.py          ← FastAPI server (search, image proxy, autosuggest, logging)
   index.html         ← Single-file frontend (no build step)
-  prd/               ← Product requirement docs for each feature
+  digest.py          ← Daily query digest script
+  logs/              ← queries.jsonl, clicks.jsonl, clickstream_refresh.jsonl
+  prd/               ← Product requirement docs
   README.md          ← This file
 
 zettair/
@@ -266,13 +310,18 @@ zettair/
     zet              ← Compiled binary (gitignored — build from source)
     src/             ← Patched C source (ARM fixes, strvlen inline)
   wikipedia/
-    wiki2trec.py     ← Converts XML dump → TREC + snippets/images JSON
-    simplewiki.xml   ← Wikipedia dump (gitignored — download fresh)
-    simplewiki.trec  ← TREC format (gitignored — regenerate)
-    simplewiki_snippets.json  ← (gitignored — regenerate)
-    simplewiki_images.json    ← (gitignored — regenerate)
+    wiki2trec.py          ← XML dump → TREC + snippets/images JSON
+    build_autosuggest.py  ← Clickstream → autosuggest.json (with decay)
+    refresh_clickstream.py ← Monthly auto-download + rebuild
+    simplewiki.xml         ← Wikipedia dump (gitignored)
+    simplewiki.trec        ← TREC format (gitignored)
+    simplewiki_snippets.json  ← (gitignored)
+    simplewiki_images.json    ← (gitignored)
+    simplewiki_titles.txt     ← (gitignored)
+    autosuggest.json          ← (gitignored)
+    clickstream-enwiki-*.tsv.gz ← (gitignored — ~6.5GB)
   wikiindex/
-    index.*          ← Zettair index files (gitignored — regenerate)
+    index.*          ← Zettair index files (gitignored)
 ```
 
 ---
@@ -286,6 +335,9 @@ zettair/
 | `ZET_PORT` | `8765` | Port to listen on |
 | `ZET_SNIPPETS` | `../zettair/wikipedia/simplewiki_snippets.json` | Snippets sidecar |
 | `ZET_IMAGES` | `../zettair/wikipedia/simplewiki_images.json` | Images sidecar |
+| `ZET_AUTOSUGGEST` | `../zettair/wikipedia/autosuggest.json` | Autosuggest data |
+| `ZET_QUERY_LOG` | `logs/queries.jsonl` | Query log path |
+| `ZET_CLICK_LOG` | `logs/clicks.jsonl` | Click log path |
 
 ---
 
@@ -293,12 +345,14 @@ zettair/
 
 **Server won't start — port in use:**
 ```bash
-ps aux | grep server.py   # find the PID
-kill <PID>
+lsof -ti:8765 | xargs kill
 ```
 
 **Images not loading:**
-Images are proxied through `/img?url=...` to avoid Wikimedia CDN blocking direct browser requests. If images break, check the server is running.
+Images are proxied through `/img?url=...` — Wikimedia CDN blocks direct browser requests. If images break, check the server is running.
+
+**Autosuggest not working:**
+Check `autosuggest.json` exists. Rebuild with `python3 build_autosuggest.py`.
 
 **Cloudflare tunnel disconnected:**
 ```bash
@@ -308,9 +362,9 @@ sudo launchctl start com.cloudflare.cloudflared
 **Re-index after a new Wikipedia dump:**
 ```bash
 cd ~/search/zettair/wikipedia
-python3 wiki2trec.py          # regenerate TREC + sidecars
-cd ../wikiindex
-rm -f index.*
+python3 wiki2trec.py
+cd ../wikiindex && rm -f index.*
 ../devel/zet -i -f index ../wikipedia/simplewiki.trec
+python3 ../wikipedia/build_autosuggest.py  # rebuild autosuggest too
 # restart server.py
 ```
