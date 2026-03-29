@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .env
 mockups.html
+logs/
+logs/.gitkeep
+logs/*.jsonl

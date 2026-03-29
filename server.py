@@ -6,10 +6,11 @@ import asyncio
 import json
 import os
 import re
-
+import datetime
 import urllib.request
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
+from pydantic import BaseModel
 
 # --- Config (env vars with sensible defaults) ---
 ZET_BINARY = os.environ.get(
@@ -21,6 +22,21 @@ ZET_INDEX = os.environ.get(
     os.path.join(os.path.dirname(__file__), "../zettair/wikiindex/index"),
 )
 ZET_PORT = int(os.environ.get("ZET_PORT", "8765"))
+
+# Query + click log
+_log_dir = os.path.join(os.path.dirname(__file__), "logs")
+QUERY_LOG = os.environ.get("ZET_QUERY_LOG", os.path.join(_log_dir, "queries.jsonl"))
+CLICK_LOG  = os.environ.get("ZET_CLICK_LOG",  os.path.join(_log_dir, "clicks.jsonl"))
+_log_lock = asyncio.Lock()
+
+def _ts() -> str:
+    return datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+async def _append_log(path: str, record: dict):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    async with _log_lock:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 # Sidecar data paths (alongside the XML source)
 _wiki_dir = os.path.join(os.path.dirname(__file__), "../zettair/wikipedia")
@@ -151,12 +167,41 @@ async def search(
         return JSONResponse({"error": "Empty query"}, status_code=400)
     parsed = await run_zet(q.strip(), n)
     results = enrich_results(parsed["results"])
+
+    # Log the query (fire-and-forget)
+    asyncio.create_task(_append_log(QUERY_LOG, {
+        "ts": _ts(),
+        "q": q.strip(),
+        "total": parsed["total"],
+        "took_ms": parsed["took_ms"],
+    }))
+
     return {
         "query": q,
         "total": parsed["total"],
         "took_ms": parsed["took_ms"],
         "results": results,
     }
+
+
+class ClickEvent(BaseModel):
+    q: str
+    docno: str
+    rank: int
+    score: float
+
+
+@app.post("/click")
+async def click(event: ClickEvent):
+    """Log a result click."""
+    asyncio.create_task(_append_log(CLICK_LOG, {
+        "ts": _ts(),
+        "q": event.q,
+        "docno": event.docno,
+        "rank": event.rank,
+        "score": event.score,
+    }))
+    return {"ok": True}
 
 
 @app.get("/img")

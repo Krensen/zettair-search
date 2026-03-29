@@ -31,8 +31,8 @@
 
     #home .logo {
       margin-top: 15vh;
-      margin-bottom: 1.5rem;
-      font-size: 4rem;
+      margin-bottom: 1.75rem;
+      font-size: 4.5rem;
       font-weight: 400;
       letter-spacing: -1px;
     }
@@ -60,8 +60,8 @@
       align-items: center;
       border: 1px solid #dfe1e5;
       border-radius: 24px;
-      padding: 0.55rem 1rem;
-      gap: 0.5rem;
+      padding: 0.65rem 1.1rem;
+      gap: 0.6rem;
       background: #fff;
       transition: box-shadow 0.2s, border-color 0.2s;
     }
@@ -85,7 +85,7 @@
     .search-buttons {
       display: flex;
       gap: 0.75rem;
-      margin-top: 1.5rem;
+      margin-top: 1.75rem;
     }
 
     .search-buttons button {
@@ -94,7 +94,7 @@
       border-radius: 4px;
       color: #3c4043;
       font-size: 0.875rem;
-      padding: 0.55rem 1rem;
+      padding: 0.6rem 1.1rem;
       cursor: pointer;
     }
 
@@ -109,7 +109,7 @@
     .results-header {
       display: flex;
       align-items: center;
-      padding: 1rem 1.5rem 0;
+      padding: 0.75rem 1.5rem;
       gap: 1.5rem;
       border-bottom: 1px solid #ebebeb;
       flex-wrap: wrap;
@@ -122,6 +122,7 @@
       flex-shrink: 0;
       cursor: pointer;
       text-decoration: none;
+      padding-bottom: 2px;
     }
 
     .logo-small span:nth-child(1) { color: #4285f4; }
@@ -139,8 +140,8 @@
       align-items: center;
       border: 1px solid #dfe1e5;
       border-radius: 24px;
-      padding: 0.45rem 1rem;
-      gap: 0.5rem;
+      padding: 0.55rem 1.1rem;
+      gap: 0.6rem;
       background: #fff;
       transition: box-shadow 0.2s, border-color 0.2s;
     }
@@ -159,7 +160,6 @@
       background: transparent;
     }
 
-    /* Animated search icon when loading */
     .results-search-box .search-icon {
       flex-shrink: 0;
       color: #9aa0a6;
@@ -172,79 +172,93 @@
     @keyframes pulse { from { opacity: 0.4; } to { opacity: 1; } }
 
     .results-body {
-      max-width: 652px;
-      margin: 0 0 0 calc(max(1.5rem, 50vw - 480px));
-      padding: 0.75rem 1rem 2rem;
+      max-width: 700px;
+      margin: 0 0 0 calc(max(1.5rem, 50vw - 490px));
+      padding: 0.5rem 1rem 3rem;
     }
 
     .results-meta {
-      font-size: 0.85rem;
+      font-size: 0.8rem;
       color: #70757a;
-      padding: 0.5rem 0 1rem;
-      min-height: 2rem;
+      padding: 0.6rem 0 1.25rem;
+      min-height: 2.2rem;
     }
 
     /* ── KNOWLEDGE PANEL ── */
     .knowledge-panel {
       display: flex;
-      gap: 1.2rem;
+      gap: 1.25rem;
       background: #f8f9fa;
       border: 1px solid #e8eaed;
-      border-radius: 8px;
-      padding: 1rem;
-      margin-bottom: 1.5rem;
-      max-width: 600px;
+      border-radius: 12px;
+      padding: 1.1rem 1.25rem;
+      margin-bottom: 1.75rem;
+      max-width: 620px;
+      align-items: flex-start;
     }
 
     .knowledge-panel img {
-      width: 120px;
-      height: 150px;
+      width: 112px;
+      height: 140px;
       object-fit: cover;
       border-radius: 8px;
       flex-shrink: 0;
       box-shadow: 0 1px 4px rgba(0,0,0,0.15);
     }
 
-    .knowledge-panel-text h3 {
-      font-size: 1.1rem;
+    .knowledge-panel-text { flex: 1; min-width: 0; }
+
+    .knowledge-panel-text .kp-title {
+      font-size: 1.2rem;
       font-weight: 600;
       color: #202124;
-      margin-bottom: 0.4rem;
-    }
-
-    .knowledge-panel-text a {
-      color: #1a0dab;
+      margin-bottom: 2px;
+      display: block;
       text-decoration: none;
-      font-size: 1.1rem;
-      font-weight: 600;
     }
 
-    .knowledge-panel-text a:hover { text-decoration: underline; }
+    .knowledge-panel-text .kp-title:hover { text-decoration: underline; }
+
+    .knowledge-panel-text .kp-source {
+      font-size: 0.75rem;
+      color: #70757a;
+      margin-bottom: 0.6rem;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .knowledge-panel-text .kp-source img {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      box-shadow: none;
+      flex-shrink: 0;
+    }
 
     .knowledge-panel-text p {
       font-size: 0.875rem;
       color: #4d5156;
-      line-height: 1.55;
+      line-height: 1.6;
     }
 
     /* ── RESULT ITEMS ── */
     .result-item {
-      margin-bottom: 1.75rem;
-      max-width: 652px;
+      margin-bottom: 2rem;
+      max-width: 620px;
       display: flex;
       gap: 16px;
       align-items: center;
     }
 
-    /* Left: all text */
     .result-text { flex: 1; min-width: 0; }
 
-    /* Source line: favicon + site name + breadcrumb */
+    /* Source line: favicon + site name + breadcrumb path */
     .result-source {
       display: flex;
       align-items: center;
-      gap: 7px;
-      margin-bottom: 2px;
+      gap: 8px;
+      margin-bottom: 3px;
     }
 
     .result-favicon {
@@ -259,30 +273,30 @@
     .result-site {
       display: flex;
       flex-direction: column;
-      line-height: 1.2;
+      line-height: 1.25;
+      min-width: 0;
     }
 
     .result-site-name {
-      font-size: 0.85rem;
+      font-size: 0.875rem;
       color: #202124;
-      font-weight: 400;
     }
 
     .result-breadcrumb {
-      font-size: 0.75rem;
+      font-size: 0.78rem;
       color: #4d5156;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      max-width: 480px;
+      max-width: 460px;
     }
 
     .result-title {
-      font-size: 1.15rem;
+      font-size: 1.2rem;
       color: #1a0dab;
       font-weight: 400;
       line-height: 1.3;
-      margin: 3px 0 4px;
+      margin: 4px 0 5px;
       text-decoration: none;
       display: block;
     }
@@ -291,17 +305,17 @@
     .result-title:visited { color: #609; }
 
     .result-snippet {
-      font-size: 0.875rem;
+      font-size: 0.9rem;
       color: #4d5156;
-      line-height: 1.58;
+      line-height: 1.6;
     }
 
-    /* Right: image (only when available), centred against the card */
+    /* Thumbnail — right-aligned, centred on the card */
     .result-thumb-wrap { flex-shrink: 0; }
 
     .result-thumb {
-      width: 86px;
-      height: 86px;
+      width: 92px;
+      height: 92px;
       object-fit: cover;
       border-radius: 8px;
       display: block;
@@ -314,11 +328,11 @@
       font-size: 0.95rem;
     }
 
-    @media (max-width: 600px) {
+    @media (max-width: 640px) {
       .results-body { margin-left: 1rem; padding-right: 1rem; }
       .knowledge-panel { flex-direction: column; }
-      .knowledge-panel img { width: 100%; height: 180px; }
-      .result-thumb { width: 64px; height: 64px; }
+      .knowledge-panel img { width: 100%; height: 200px; }
+      .result-thumb { width: 68px; height: 68px; }
     }
   </style>
 </head>
@@ -365,48 +379,38 @@
 </div>
 
 <script>
-  const homePage        = document.getElementById('home');
-  const resultsPage     = document.getElementById('results-page');
-  const homeQuery       = document.getElementById('homeQuery');
-  const resultsQuery    = document.getElementById('resultsQuery');
-  const resultsMeta     = document.getElementById('resultsMeta');
-  const resultsList     = document.getElementById('resultsList');
-  const knowledgePanel  = document.getElementById('knowledgePanel');
-  const resultsForm     = document.getElementById('resultsForm');
-  const resultsSearchBox = resultsForm.closest ? resultsForm : resultsForm.parentElement;
+  const homePage       = document.getElementById('home');
+  const resultsPage    = document.getElementById('results-page');
+  const homeQuery      = document.getElementById('homeQuery');
+  const resultsQuery   = document.getElementById('resultsQuery');
+  const resultsMeta    = document.getElementById('resultsMeta');
+  const resultsList    = document.getElementById('resultsList');
+  const knowledgePanel = document.getElementById('knowledgePanel');
+  const resultsForm    = document.getElementById('resultsForm');
 
   let debounceTimer = null;
   let currentController = null;
 
-  // ── HOME: submit only ──
   document.getElementById('homeForm').addEventListener('submit', e => {
     e.preventDefault();
     const q = homeQuery.value.trim();
     if (q) doSearch(q);
   });
 
-  // ── RESULTS: submit ──
   resultsForm.addEventListener('submit', e => {
     e.preventDefault();
     const q = resultsQuery.value.trim();
     if (q) doSearch(q);
   });
 
-  // ── RESULTS: instant search (debounced, results page only) ──
   resultsQuery.addEventListener('input', () => {
     clearTimeout(debounceTimer);
     const q = resultsQuery.value.trim();
-    if (!q) {
-      resultsMeta.textContent = '';
-      resultsList.innerHTML = '';
-      knowledgePanel.innerHTML = '';
-      return;
-    }
+    if (!q) { resultsMeta.textContent = ''; resultsList.innerHTML = ''; knowledgePanel.innerHTML = ''; return; }
     if (q.length < 2) return;
     debounceTimer = setTimeout(() => doSearch(q, true), 300);
   });
 
-  // ── LOGO: back to home ──
   document.getElementById('logoBack').addEventListener('click', () => {
     resultsPage.style.display = 'none';
     homePage.style.display = 'flex';
@@ -415,24 +419,17 @@
   });
 
   async function doSearch(q, isInstant = false) {
-    // Cancel in-flight request
     if (currentController) currentController.abort();
     currentController = new AbortController();
 
-    // Switch to results view
     homePage.style.display = 'none';
     resultsPage.style.display = 'block';
     resultsQuery.value = q;
-
-    // Show loading state
     resultsForm.classList.add('loading');
 
     try {
-      const res = await fetch(`/search?q=${encodeURIComponent(q)}&n=25`, {
-        signal: currentController.signal
-      });
+      const res = await fetch(`/search?q=${encodeURIComponent(q)}&n=25`, { signal: currentController.signal });
       const data = await res.json();
-
       resultsForm.classList.remove('loading');
 
       if (!data.results || data.results.length === 0) {
@@ -444,32 +441,38 @@
 
       resultsMeta.textContent = `About ${data.total.toLocaleString()} results (${data.took_ms} ms)`;
 
-      // Knowledge panel — top result if it has an image
+      // Knowledge panel — top result with image
       const top = data.results[0];
       if (top.image_url) {
         const title = formatTitle(top.docno);
-        const wikiUrl = `https://simple.wikipedia.org/wiki/${encodeURIComponent(top.docno)}`;
+        const wikiUrl = wikiLink(top.docno);
         knowledgePanel.innerHTML = `
           <div class="knowledge-panel">
-            <img src="${escHtml(proxyImg(top.image_url))}" alt="${escHtml(title)}"
+            <img src="${esc(proxyImg(top.image_url))}" alt="${esc(title)}"
                  onerror="this.closest('.knowledge-panel').style.display='none'">
             <div class="knowledge-panel-text">
-              <a href="${escHtml(wikiUrl)}" target="_blank" rel="noopener noreferrer">${escHtml(title)}</a>
-              <p>${escHtml(top.snippet || '')}</p>
+              <a class="kp-title" href="${esc(wikiUrl)}" target="_blank" rel="noopener noreferrer"
+                 onclick="logClick(${JSON.stringify(q)}, ${JSON.stringify(top.docno)}, 1, ${top.score})"
+              >${esc(title)}</a>
+              <div class="kp-source">
+                <img src="https://www.google.com/s2/favicons?domain=simple.wikipedia.org&sz=32" alt="">
+                <span>Wikipedia · simple.wikipedia.org</span>
+              </div>
+              <p>${esc(top.snippet || '')}</p>
             </div>
           </div>`;
       } else {
         knowledgePanel.innerHTML = '';
       }
 
-      // Result list
-      resultsList.innerHTML = data.results.map((r, idx) => {
+      // Results
+      resultsList.innerHTML = data.results.map(r => {
         const title = formatTitle(r.docno);
-        const wikiUrl = `https://simple.wikipedia.org/wiki/${encodeURIComponent(r.docno)}`;
-        const breadcrumb = `simple.wikipedia.org › wiki › ${r.docno.replace(/_/g,' ')}`;
-        const thumbHtml = r.image_url
+        const url = wikiLink(r.docno);
+        const crumb = `simple.wikipedia.org › wiki › ${r.docno.replace(/_/g, ' ')}`;
+        const thumb = r.image_url
           ? `<div class="result-thumb-wrap">
-               <img class="result-thumb" src="${escHtml(proxyImg(r.image_url))}" alt="${escHtml(title)}"
+               <img class="result-thumb" src="${esc(proxyImg(r.image_url))}" alt="${esc(title)}"
                  onerror="this.closest('.result-thumb-wrap').remove()">
              </div>`
           : '';
@@ -478,44 +481,42 @@
             <div class="result-text">
               <div class="result-source">
                 <img class="result-favicon"
-                  src="https://www.google.com/s2/favicons?domain=simple.wikipedia.org&sz=64"
-                  alt="">
+                  src="https://www.google.com/s2/favicons?domain=simple.wikipedia.org&sz=64" alt="">
                 <div class="result-site">
                   <span class="result-site-name">Wikipedia</span>
-                  <span class="result-breadcrumb">${escHtml(breadcrumb)}</span>
+                  <span class="result-breadcrumb">${esc(crumb)}</span>
                 </div>
               </div>
-              <a class="result-title" href="${escHtml(wikiUrl)}"
-                 target="_blank" rel="noopener noreferrer">${escHtml(title)}</a>
-              <div class="result-snippet">${escHtml(r.snippet || '')}</div>
+              <a class="result-title" href="${esc(url)}" target="_blank" rel="noopener noreferrer"
+                 onclick="logClick(${JSON.stringify(q)}, ${JSON.stringify(r.docno)}, ${r.rank}, ${r.score})"
+              >${esc(title)}</a>
+              <div class="result-snippet">${esc(r.snippet || '')}</div>
             </div>
-            ${thumbHtml}
+            ${thumb}
           </div>`;
       }).join('');
 
     } catch (err) {
-      if (err.name === 'AbortError') return; // cancelled — ignore
+      if (err.name === 'AbortError') return;
       resultsForm.classList.remove('loading');
-      resultsMeta.textContent = '';
-      resultsList.innerHTML = `<div class="no-results">Something went wrong: ${escHtml(err.message)}</div>`;
+      resultsList.innerHTML = `<div class="no-results">Something went wrong: ${esc(err.message)}</div>`;
     }
   }
 
-  function proxyImg(url) {
-    return url ? `/img?url=${encodeURIComponent(url)}` : null;
+  function logClick(q, docno, rank, score) {
+    // Fire-and-forget — don't block navigation
+    fetch('/click', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({q, docno, rank, score}),
+      keepalive: true,   // survives page navigation
+    }).catch(() => {});
   }
 
-  function formatTitle(docno) {
-    return (docno || '').replace(/_/g, ' ').replace(/\s*\(.*?\)\s*$/, '').trim();
-  }
-
-  function escHtml(s) {
-    return String(s)
-      .replace(/&/g,'&amp;')
-      .replace(/</g,'&lt;')
-      .replace(/>/g,'&gt;')
-      .replace(/"/g,'&quot;');
-  }
+  const proxyImg = url => url ? `/img?url=${encodeURIComponent(url)}` : null;
+  const wikiLink = docno => `https://simple.wikipedia.org/wiki/${encodeURIComponent(docno)}`;
+  const formatTitle = docno => (docno || '').replace(/_/g, ' ').replace(/\s*\(.*?\)\s*$/, '').trim();
+  const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 </script>
 </body>
 </html>
