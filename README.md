@@ -2,8 +2,6 @@
 
 A full-text BM25 search engine over Simple English Wikipedia, running locally on a Mac with a permanent public URL via Cloudflare Tunnel.
 
-**Live demo:** https://search.hughwilliams.com
-
 ---
 
 ## What it is
