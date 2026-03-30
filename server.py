@@ -1,14 +1,19 @@
 """
 Zettair Search Web Service
-FastAPI wrapper around the zet CLI with async queuing.
+FastAPI wrapper around the zet CLI with a persistent worker pool.
+
+PRD-007: keeps N zet processes alive across queries — index loaded once,
+queries piped via stdin, JSON Lines responses read from stdout.
 """
 import asyncio
 import bisect
 import json
 import os
 import re
+import time
 import datetime
 import urllib.request
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
@@ -22,15 +27,18 @@ ZET_INDEX = os.environ.get(
     "ZET_INDEX",
     os.path.join(os.path.dirname(__file__), "../zettair/wikiindex/index"),
 )
-ZET_PORT        = int(os.environ.get("ZET_PORT", "8765"))
-ZET_CLICK_PRIOR = os.environ.get("ZET_CLICK_PRIOR",
+ZET_PORT         = int(os.environ.get("ZET_PORT", "8765"))
+ZET_CLICK_PRIOR  = os.environ.get("ZET_CLICK_PRIOR",
     os.path.join(os.path.dirname(__file__), "../zettair/wikipedia/click_prior.bin"))
-ZET_CLICK_ALPHA = os.environ.get("ZET_CLICK_ALPHA", "0.5")
+ZET_CLICK_ALPHA  = os.environ.get("ZET_CLICK_ALPHA", "0.5")
+ZET_WORKERS      = int(os.environ.get("ZET_WORKERS", "2"))
+ZET_QUERY_TIMEOUT = float(os.environ.get("ZET_QUERY_TIMEOUT", "5.0"))
 
 # Query + click log
 _log_dir = os.path.join(os.path.dirname(__file__), "logs")
 QUERY_LOG = os.environ.get("ZET_QUERY_LOG", os.path.join(_log_dir, "queries.jsonl"))
 CLICK_LOG  = os.environ.get("ZET_CLICK_LOG",  os.path.join(_log_dir, "clicks.jsonl"))
+CRASH_LOG  = os.environ.get("ZET_CRASH_LOG",  os.path.join(_log_dir, "zet_crashes.jsonl"))
 _log_lock = asyncio.Lock()
 
 def _ts() -> str:
@@ -42,16 +50,11 @@ async def _append_log(path: str, record: dict):
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-# Sidecar data paths (alongside the XML source)
+# Sidecar data paths
 _wiki_dir = os.path.join(os.path.dirname(__file__), "../zettair/wikipedia")
 SNIPPETS_PATH    = os.environ.get("ZET_SNIPPETS",    os.path.join(_wiki_dir, "simplewiki_snippets.json"))
 IMAGES_PATH      = os.environ.get("ZET_IMAGES",      os.path.join(_wiki_dir, "simplewiki_images.json"))
 AUTOSUGGEST_PATH = os.environ.get("ZET_AUTOSUGGEST", os.path.join(_wiki_dir, "autosuggest.json"))
-
-app = FastAPI(title="Zettair Search Service")
-
-# Serialize access to the zet subprocess
-_lock = asyncio.Lock()
 
 # Sidecar data loaded at startup
 _snippets: dict = {}
@@ -59,9 +62,184 @@ _images: dict = {}
 _autosuggest: list = []   # sorted list of (query, count) tuples
 
 
-@app.on_event("startup")
-async def load_sidecars():
-    global _snippets, _images
+# ---------------------------------------------------------------------------
+# Persistent Zettair worker pool (PRD-007)
+# ---------------------------------------------------------------------------
+
+class ZetWorker:
+    """A single long-lived zet process."""
+
+    def __init__(self, proc: asyncio.subprocess.Process, worker_id: int):
+        self.proc = proc
+        self.worker_id = worker_id
+        self.busy = False
+        self.queries_served = 0
+        self.crashes = 0
+
+    def is_alive(self) -> bool:
+        return self.proc.returncode is None
+
+    async def query(self, q: str, n: int) -> list[dict]:
+        """Send a query, read JSON Lines until sentinel. Returns list of result dicts."""
+        line = (q.strip().replace("\n", " ") + "\n").encode()
+        self.proc.stdin.write(line)
+        await self.proc.stdin.drain()
+
+        results = []
+        async with asyncio.timeout(ZET_QUERY_TIMEOUT):
+            while True:
+                raw = await self.proc.stdout.readline()
+                if not raw:
+                    raise RuntimeError(f"Worker {self.worker_id} stdout closed unexpectedly")
+                obj = json.loads(raw.decode("utf-8", errors="replace"))
+                if obj.get("done"):
+                    # Attach total/took_ms to first result as metadata carrier
+                    results.append({"_meta": True,
+                                    "total": obj.get("total", 0),
+                                    "took_ms": obj.get("took_ms", 0)})
+                    break
+                results.append(obj)
+        self.queries_served += 1
+        return results
+
+
+class ZetPool:
+    """A fixed pool of persistent zet worker processes."""
+
+    def __init__(self):
+        self._workers: list[ZetWorker] = []
+        self._sem: asyncio.Semaphore | None = None
+        self._lock = asyncio.Lock()
+        self._env: dict = {}
+        self._args: list[str] = []
+
+    async def start(self, size: int):
+        self._sem = asyncio.Semaphore(size)
+        # Build env and args once
+        self._env = os.environ.copy()
+        if os.path.exists(ZET_CLICK_PRIOR):
+            self._env["ZET_CLICK_PRIOR"] = ZET_CLICK_PRIOR
+            self._env["ZET_CLICK_ALPHA"] = ZET_CLICK_ALPHA
+
+        self._args = [
+            ZET_BINARY,
+            "-f", ZET_INDEX,
+            "--okapi",
+            "--summary=plain",
+            "--output=json",
+            "-n", "100",   # max results per query; Python slices to requested n
+        ]
+
+        for i in range(size):
+            w = await self._spawn(i)
+            self._workers.append(w)
+
+        print(f"[zet_pool] started {size} workers", flush=True)
+
+    async def _spawn(self, worker_id: int) -> ZetWorker:
+        proc = await asyncio.create_subprocess_exec(
+            *self._args,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=self._env,
+        )
+        return ZetWorker(proc, worker_id)
+
+    async def _get_worker(self) -> ZetWorker:
+        """Return a live, non-busy worker (respawning if needed)."""
+        async with self._lock:
+            for w in self._workers:
+                if not w.busy:
+                    if not w.is_alive():
+                        await self._respawn_worker(w)
+                    w.busy = True
+                    return w
+        # Should not reach here if semaphore is used correctly
+        raise RuntimeError("No available worker found")
+
+    async def _respawn_worker(self, w: ZetWorker):
+        w.crashes += 1
+        print(f"[zet_pool] respawning worker {w.worker_id} (crash #{w.crashes})", flush=True)
+        asyncio.create_task(_append_log(CRASH_LOG, {
+            "ts": _ts(),
+            "worker_id": w.worker_id,
+            "crash_count": w.crashes,
+        }))
+        try:
+            w.proc.kill()
+        except Exception:
+            pass
+        new_proc = await asyncio.create_subprocess_exec(
+            *self._args,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=self._env,
+        )
+        w.proc = new_proc
+
+    async def run_query(self, q: str, n: int) -> dict:
+        """Acquire a worker, run the query, release, return parsed result."""
+        await self._sem.acquire()
+        worker = await self._get_worker()
+        try:
+            t0 = time.monotonic()
+            raw = await worker.query(q, n)
+            elapsed = (time.monotonic() - t0) * 1000
+
+            meta = next((r for r in raw if r.get("_meta")), {})
+            results = [r for r in raw if not r.get("_meta")][:n]  # slice to requested n
+
+            return {
+                "total": meta.get("total", len(results)),
+                "took_ms": round(meta.get("took_ms", elapsed), 2),
+                "results": results,
+            }
+        except Exception as e:
+            # Worker may have crashed — respawn and surface error
+            if not worker.is_alive():
+                async with self._lock:
+                    await self._respawn_worker(worker)
+            raise e
+        finally:
+            worker.busy = False
+            self._sem.release()
+
+    async def shutdown(self):
+        for w in self._workers:
+            try:
+                w.proc.stdin.close()
+                w.proc.kill()
+            except Exception:
+                pass
+        print("[zet_pool] shutdown complete", flush=True)
+
+
+# Global pool instance
+_pool = ZetPool()
+
+
+# ---------------------------------------------------------------------------
+# FastAPI app with lifespan
+# ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    await _load_sidecars()
+    await _pool.start(ZET_WORKERS)
+    yield
+    # Shutdown
+    await _pool.shutdown()
+
+
+app = FastAPI(title="Zettair Search Service", lifespan=lifespan)
+
+
+async def _load_sidecars():
+    global _snippets, _images, _autosuggest
+
     if os.path.exists(SNIPPETS_PATH):
         print(f"Loading snippets from {SNIPPETS_PATH}...", flush=True)
         with open(SNIPPETS_PATH, encoding="utf-8") as f:
@@ -78,7 +256,6 @@ async def load_sidecars():
     else:
         print(f"WARNING: images file not found: {IMAGES_PATH}")
 
-    global _autosuggest
     if os.path.exists(AUTOSUGGEST_PATH):
         print(f"Loading autosuggest from {AUTOSUGGEST_PATH}...", flush=True)
         with open(AUTOSUGGEST_PATH, encoding="utf-8") as f:
@@ -88,96 +265,25 @@ async def load_sidecars():
         print(f"WARNING: autosuggest file not found: {AUTOSUGGEST_PATH}")
 
 
-def parse_zet_output(output: str) -> dict:
-    """
-    Parse zet stdout into structured results.
-    """
-    results = []
-    total = 0
-    took_ms = None
-
-    header_re = re.compile(
-        r"^(\d+)\.\s+(.*?)\s+\(score\s+([\d.]+),\s+docid\s+(\d+)\)"
-    )
-    summary_re = re.compile(r"^(\d+) results of (\d+) shown \(took ([\d.]+) seconds\)")
-
-    lines = output.splitlines()
-    i = 0
-    while i < len(lines):
-        raw = lines[i]
-        line = raw[2:] if raw.startswith("> ") else raw
-        line = line.strip()
-
-        m = header_re.match(line)
-        if m:
-            rank = int(m.group(1))
-            title = m.group(2).strip()
-            score = float(m.group(3))
-            docid = int(m.group(4))
-            # Zettair's own snippet (fallback)
-            zet_snippet = ""
-            if i + 1 < len(lines):
-                zet_snippet = lines[i + 1].strip().strip('"')
-                i += 1
-            results.append({
-                "rank": rank,
-                "score": score,
-                "docid": docid,
-                "title": title,
-                "zet_snippet": zet_snippet,
-            })
-            i += 1
-            continue
-
-        m = summary_re.match(line)
-        if m:
-            total = int(m.group(2))
-            took_ms = round(float(m.group(3)) * 1000, 3)
-
-        i += 1
-
-    return {"total": total, "took_ms": took_ms, "results": results}
-
-
 def enrich_results(results: list) -> list:
     """Attach snippets and images from sidecar data."""
     enriched = []
     for r in results:
-        docno = r["title"]  # title from zet output is the DOCNO
+        docno = r.get("docno", "")
         enriched.append({
             "rank": r["rank"],
             "score": r["score"],
             "docid": r["docid"],
             "docno": docno,
-            "snippet": _snippets.get(docno) or r["zet_snippet"],
+            "snippet": _snippets.get(docno, ""),
             "image_url": _images.get(docno),
         })
     return enriched
 
 
-async def run_zet(query: str, n: int) -> dict:
-    """Run zet as a subprocess, parse and return results."""
-    env = os.environ.copy()
-    if os.path.exists(ZET_CLICK_PRIOR):
-        env["ZET_CLICK_PRIOR"] = ZET_CLICK_PRIOR
-        env["ZET_CLICK_ALPHA"] = ZET_CLICK_ALPHA
-
-    async with _lock:
-        proc = await asyncio.create_subprocess_exec(
-            ZET_BINARY,
-            "-f", ZET_INDEX,
-            "--okapi",
-            "--summary=plain",
-            "-n", str(n),
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
-        stdout, stderr = await proc.communicate(input=(query + "\n").encode())
-
-    return parse_zet_output(stdout.decode("utf-8", errors="replace"))
-
+# ---------------------------------------------------------------------------
+# API endpoints
+# ---------------------------------------------------------------------------
 
 @app.get("/suggest")
 async def suggest(
@@ -189,21 +295,17 @@ async def suggest(
     if len(prefix) < 2 or not _autosuggest:
         return {"q": q, "suggestions": []}
 
-    # Binary search: find first entry >= prefix
-    keys = [x[0] for x in _autosuggest]  # sorted query strings
+    keys = [x[0] for x in _autosuggest]
     lo = bisect.bisect_left(keys, prefix)
 
-    # Collect all entries that start with the prefix
     candidates = []
     i = lo
     while i < len(_autosuggest) and _autosuggest[i][0].startswith(prefix):
         candidates.append(_autosuggest[i])
         i += 1
 
-    # Sort by count descending, take top n
     candidates.sort(key=lambda x: -x[1])
-    suggestions = [{"query": q, "count": c} for q, c in candidates[:n]]
-
+    suggestions = [{"query": qstr, "count": c} for qstr, c in candidates[:n]]
     return {"q": q, "suggestions": suggestions}
 
 
@@ -214,10 +316,16 @@ async def search(
 ):
     if not q.strip():
         return JSONResponse({"error": "Empty query"}, status_code=400)
-    parsed = await run_zet(q.strip(), n)
+
+    try:
+        parsed = await _pool.run_query(q.strip(), n)
+    except asyncio.TimeoutError:
+        return JSONResponse({"error": "Query timed out"}, status_code=504)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
     results = enrich_results(parsed["results"])
 
-    # Log the query (fire-and-forget)
     asyncio.create_task(_append_log(QUERY_LOG, {
         "ts": _ts(),
         "q": q.strip(),
