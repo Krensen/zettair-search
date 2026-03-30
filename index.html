@@ -560,7 +560,7 @@
                 <img src="https://www.google.com/s2/favicons?domain=simple.wikipedia.org&sz=32" alt="">
                 <span>Wikipedia · simple.wikipedia.org</span>
               </div>
-              <p>${esc(top.snippet || '')}</p>
+              <p>${highlightQuery(top.snippet || '', q)}</p>
             </div>
           </div>`;
       } else {
@@ -592,7 +592,7 @@
               <a class="result-title" href="${esc(url)}" target="_blank" rel="noopener noreferrer"
                  onclick="logClick(${JSON.stringify(q)}, ${JSON.stringify(r.docno)}, ${r.rank}, ${r.score})"
               >${esc(title)}</a>
-              <div class="result-snippet">${esc(r.snippet || '')}</div>
+              <div class="result-snippet">${highlightQuery(r.snippet || '', q)}</div>
             </div>
             ${thumb}
           </div>`;
@@ -730,6 +730,26 @@
   const wikiLink = docno => `https://simple.wikipedia.org/wiki/${encodeURIComponent(docno)}`;
   const formatTitle = docno => (docno || '').replace(/_/g, ' ').replace(/\s*\(.*?\)\s*$/, '').trim();
   const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+  // Highlight query terms in a snippet string.
+  // Escapes HTML first, then wraps whole-word matches in <b>.
+  // Case-insensitive; ignores very short words (≤2 chars) and stop words.
+  const HIGHLIGHT_STOP = new Set([
+    'a','an','the','and','or','but','in','on','at','to','for','of','with',
+    'by','from','is','are','was','were','it','its','this','that','as','not',
+    'be','been','have','has','had','do','does','did','so','if','no','up',
+  ]);
+  function highlightQuery(snippet, query) {
+    if (!snippet || !query) return esc(snippet || '');
+    const terms = query.trim().toLowerCase().split(/\s+/)
+      .filter(t => t.length > 2 && !HIGHLIGHT_STOP.has(t))
+      .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')); // escape regex chars
+    if (!terms.length) return esc(snippet);
+    const escaped = esc(snippet);
+    // Build one alternation regex over all terms, word-boundary anchored
+    const pattern = new RegExp(`\\b(${terms.join('|')})\\b`, 'gi');
+    return escaped.replace(pattern, '<b>$1</b>');
+  }
 </script>
 </body>
 </html>
