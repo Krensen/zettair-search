@@ -155,7 +155,21 @@ Produces `autosuggest.json` — 152k query+popularity pairs, sorted for binary s
 
 ---
 
-## Step 9 — Run the search server
+## Step 9 — Build click prior (improves ranking of popular articles)
+
+```bash
+cd ~/search/zettair/wikipedia
+python3 build_docno_map.py   # ~1 min — maps docno → title
+python3 build_click_prior.py # ~4 min — aggregates clickstream into click_prior.bin
+```
+
+Produces:
+- `docno_map.tsv` — sequential docno → article title mapping
+- `click_prior.bin` — float32 array of decayed click scores per article (~1MB)
+
+---
+
+## Step 10 — Run the search server
 
 ```bash
 cd ~/search/zettair-search
@@ -165,13 +179,18 @@ ZET_INDEX=~/search/zettair/wikiindex/index \
 python3 server.py
 ```
 
+The click prior is loaded automatically if `click_prior.bin` is present at the default path. Tune with:
+```bash
+ZET_CLICK_ALPHA=0.5  # default — higher = stronger click boost
+```
+
 Test locally: http://localhost:8765
 
 The server loads snippets, images, and autosuggest into memory on startup (~10 seconds).
 
 ---
 
-## Step 10 — Set up Cloudflare Tunnel (permanent public URL)
+## Step 11 — Set up Cloudflare Tunnel (permanent public URL)
 
 ### 10a. Log in to Cloudflare
 
@@ -220,7 +239,7 @@ Your search engine is now live at `https://search.yourdomain.com`.
 
 ---
 
-## Step 11 — Auto-start the search server on boot
+## Step 12 — Auto-start the search server on boot
 
 ```bash
 cat > ~/Library/LaunchAgents/com.zettair.search.plist << EOF
@@ -262,7 +281,7 @@ launchctl load ~/Library/LaunchAgents/com.zettair.search.plist
 
 ---
 
-## Step 12 — Set up monthly clickstream refresh (auto-updates autosuggest)
+## Step 13 — Set up monthly clickstream refresh (auto-updates autosuggest)
 
 A cron job checks for new clickstream data from the 10th of each month, downloads it, rebuilds `autosuggest.json` automatically.
 
@@ -288,7 +307,8 @@ Or add a crontab entry:
 | `checkpoint-1b` | Google-style result cards |
 | `checkpoint-2` | Query + click logging, daily digest |
 | `checkpoint-3` | Autosuggest live |
-| `checkpoint-4` | Paul Smith styling, multi-month clickstream, PRD-006 ← current |
+| `checkpoint-4` | Paul Smith styling, multi-month clickstream, PRD-006 spec |
+| `checkpoint-5` | Click prior live (α=0.5), persistent process spec (PRD-007) ← current |
 
 Roll back with: `git checkout checkpoint-X`
 
@@ -311,15 +331,19 @@ zettair/
     src/             ← Patched C source (ARM fixes, strvlen inline)
   wikipedia/
     wiki2trec.py          ← XML dump → TREC + snippets/images JSON
-    build_autosuggest.py  ← Clickstream → autosuggest.json (with decay)
-    refresh_clickstream.py ← Monthly auto-download + rebuild
-    simplewiki.xml         ← Wikipedia dump (gitignored)
+    build_autosuggest.py      ← Clickstream → autosuggest.json (with decay)
+    build_docno_map.py        ← TREC file → docno_map.tsv
+    build_click_prior.py      ← Clickstream → click_prior.bin (float32, decay-weighted)
+    refresh_clickstream.py    ← Monthly auto-download + rebuild
+    simplewiki.xml            ← Wikipedia dump (gitignored)
     simplewiki.trec        ← TREC format (gitignored)
     simplewiki_snippets.json  ← (gitignored)
     simplewiki_images.json    ← (gitignored)
     simplewiki_titles.txt     ← (gitignored)
-    autosuggest.json          ← (gitignored)
-    clickstream-enwiki-*.tsv.gz ← (gitignored — ~6.5GB)
+    autosuggest.json              ← (gitignored)
+    docno_map.tsv                 ← (gitignored)
+    click_prior.bin               ← (gitignored)
+    clickstream-enwiki-*.tsv.gz   ← (gitignored — ~6.5GB)
   wikiindex/
     index.*          ← Zettair index files (gitignored)
 ```
@@ -338,6 +362,8 @@ zettair/
 | `ZET_AUTOSUGGEST` | `../zettair/wikipedia/autosuggest.json` | Autosuggest data |
 | `ZET_QUERY_LOG` | `logs/queries.jsonl` | Query log path |
 | `ZET_CLICK_LOG` | `logs/clicks.jsonl` | Click log path |
+| `ZET_CLICK_PRIOR` | `../zettair/wikipedia/click_prior.bin` | Click prior binary (auto-detected) |
+| `ZET_CLICK_ALPHA` | `0.5` | Click boost strength (0 = disabled) |
 
 ---
 
