@@ -741,14 +741,25 @@
   ]);
   function highlightQuery(snippet, query) {
     if (!snippet || !query) return esc(snippet || '');
-    const terms = query.trim().toLowerCase().split(/\s+/)
-      .filter(t => t.length > 2 && !HIGHLIGHT_STOP.has(t))
-      .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')); // escape regex chars
-    if (!terms.length) return esc(snippet);
-    const escaped = esc(snippet);
-    // Build one alternation regex over all terms, word-boundary anchored
-    const pattern = new RegExp(`\\b(${terms.join('|')})\\b`, 'gi');
-    return escaped.replace(pattern, '<b>$1</b>');
+    try {
+      const terms = query.trim().toLowerCase().split(/\s+/)
+        .filter(t => t.length > 2 && !HIGHLIGHT_STOP.has(t))
+        .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+      if (!terms.length) return esc(snippet);
+      // Split on term matches BEFORE escaping, so we don't corrupt HTML entities.
+      // Walk the snippet, find matches case-insensitively, escape each piece.
+      const pattern = new RegExp(`(${terms.join('|')})`, 'gi');
+      const parts = snippet.split(pattern);
+      const termSet = new Set(terms.map(t => t.toLowerCase()));
+      return parts.map(p => {
+        if (termSet.has(p.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))) {
+          return '<b>' + esc(p) + '</b>';
+        }
+        return esc(p);
+      }).join('');
+    } catch (e) {
+      return esc(snippet);
+    }
   }
 </script>
 </body>
