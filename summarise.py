@@ -21,19 +21,13 @@ import json
 import re
 import string
 
-# Sentence-ending punctuation (mirrors ints/summarise.c: z < 12 = sentence boundary)
-SENT_END = re.compile(r'[.!?]')
-
-# Fragment score threshold — skip fragments with no query hits
-MIN_HITS = 1
-
 # How many top fragments to show
 SHOW_FRAGS = 3
 
-# Target snippet length in characters (soft limit — we don't truncate mid-sentence)
+# Target snippet length in characters (soft limit)
 TARGET_CHARS = 300
 
-# Stop words (common English words unlikely to be useful query terms)
+# Stop words
 STOPWORDS = {
     'a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
     'of', 'with', 'by', 'from', 'is', 'are', 'was', 'were', 'be', 'been',
@@ -47,21 +41,97 @@ STOPWORDS = {
     'through', 'over', 'under', 'one', 'two', 'three', 'new', 'first',
 }
 
+# Patterns that mark a fragment as reference/citation noise — mirrors the
+# build_docstore.py line-level filter but applied at fragment level in case
+# any citations survived into the docstore.
+_RE_CITATION_FRAG = re.compile(
+    r'\bISBN\b'
+    r'|^[A-Z][a-z]+,\s+[A-Z].*?\b(19|20)\d{2}\b'   # Surname, Initial YYYY
+    r'|\bpp?\.\s*\d+'                                 # p. 48
+    r'|\bVol\b.*?\bNo\b'                              # Vol X No Y
+    r'|\bJournal\s+of\b'
+    r'|\bUniversity\s+Press\b'
+    r'|\bSitzungsberichte\b'
+)
+
+# Verb-like function words that almost always appear in real prose sentences.
+# A fragment lacking any of these is almost certainly a title, heading, or citation.
+_PROSE_VERBS = {
+    'is', 'are', 'was', 'were', 'be', 'been', 'being',
+    'has', 'have', 'had',
+    'does', 'do', 'did',
+    'became', 'become', 'becomes',
+    'found', 'made', 'used', 'known', 'called', 'named',
+    'built', 'created', 'formed', 'caused', 'resulted',
+    'worked', 'helped', 'lived', 'died', 'born', 'won', 'lost',
+    'said', 'wrote', 'published', 'developed', 'discovered', 'invented',
+    'showed', 'showed', 'came', 'went', 'left', 'started', 'began', 'ended',
+    'gave', 'took', 'put', 'set', 'led', 'led', 'brought', 'meant',
+    'can', 'could', 'will', 'would', 'may', 'might',
+    'includes', 'include', 'included',
+    'contains', 'contain', 'contained',
+}
+
+def _is_prose(fragment: str) -> bool:
+    """
+    Return True if the fragment looks like genuine prose (worth showing in a snippet).
+    Filters out: citation titles, headings, bare names, short date strings.
+    """
+    if not fragment:
+        return False
+
+    # Must be at least 30 chars — shorter is almost certainly a heading or date
+    if len(fragment) < 30:
+        return False
+
+    # Must have at least 45% alpha characters
+    alpha = sum(1 for c in fragment if c.isalpha())
+    if alpha / len(fragment) < 0.45:
+        return False
+
+    # Reject citation noise that survived docstore cleaning
+    if _RE_CITATION_FRAG.search(fragment):
+        return False
+
+    # Must contain at least one verb-like word — the key prose signal.
+    # Without a verb it's a title, heading, name, or citation fragment.
+    words = set(re.sub(r'[^a-z]', '', w) for w in fragment.lower().split())
+    if not words & _PROSE_VERBS:
+        return False
+
+    return True
+
 
 def split_fragments(text: str) -> list[str]:
-    """Split text into sentence fragments at sentence-ending punctuation."""
-    # Split on sentence boundaries, keeping the punctuation
-    parts = re.split(r'(?<=[.!?])\s+', text.strip())
-    # Also split on newlines (paragraph breaks act like sentence endings)
+    """
+    Split text into sentence fragments at sentence-ending punctuation,
+    mimicking the C parser's sentence-boundary detection.
+
+    The C ints/summarise.c splits at punctuation codes < 12, which correspond
+    to sentence-ending characters (.  !  ?  and paragraph/newline boundaries).
+    We replicate that here: split on [.!?] followed by whitespace + capital,
+    and also on bare newlines (paragraph breaks).
+    """
+    # First split on newlines — each line may be a separate sentence/item
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+
     fragments = []
-    for part in parts:
-        sub = [s.strip() for s in part.split('\n') if s.strip()]
-        fragments.extend(sub)
-    return [f for f in fragments if len(f) > 10]  # skip tiny fragments
+    for line in lines:
+        # Split within each line on sentence boundaries:
+        # period/!/? followed by space and a capital letter (or end of string)
+        parts = re.split(r'(?<=[.!?])\s+(?=[A-Z(])', line)
+        fragments.extend(p.strip() for p in parts if p.strip())
+
+    # Filter to prose-quality fragments only
+    return [f for f in fragments if _is_prose(f)]
 
 
 def score_fragment(fragment: str, query_terms: set[str]) -> float:
-    """Score a fragment: hits / length (query term density)."""
+    """
+    Score a fragment: hits / length (query term density).
+    Mirrors the C: fragments[fragcount].score = (float)hits / (float)fragpos
+    where fragpos counts word+punct pairs (so roughly word count).
+    """
     words = fragment.lower().split()
     if not words:
         return 0.0
