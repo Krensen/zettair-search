@@ -47,16 +47,19 @@ if [ -f "$CLOUDFLARE_LOG" ]; then
     RECENT=$(find "$CLOUDFLARE_LOG" -newer /tmp/.watchdog_mark 2>/dev/null | head -1)
     # Simpler: just check if the process is alive and has connections
     if pgrep -f "cloudflared tunnel run" > /dev/null 2>&1; then
-        # Check log tail for ERR/no more connections pattern
-        TAIL=$(tail -20 "$CLOUDFLARE_LOG" 2>/dev/null)
+        TAIL=$(tail -40 "$CLOUDFLARE_LOG" 2>/dev/null)
+        # Dead if: explicit exit message, or last 40 lines have no Registered connection
+        # and have multiple ERR/WRN lines (sustained failure, not momentary blip)
+        DEAD_MSG=$(echo "$TAIL" | grep -c "no more connections active\|Connection terminated\|Lost connection with the edge")
+        LIVE_MSG=$(echo "$TAIL" | grep -c "Registered tunnel connection")
         if echo "$TAIL" | grep -q "no more connections active and exiting"; then
-            log "FAIL cloudflared — detected dead tunnel, restarting"
+            log "FAIL cloudflared — explicit exit, restarting"
             restart_service "com.cloudflared-zettair"
-        elif echo "$TAIL" | grep -q "Registered tunnel connection"; then
-            log "OK cloudflared"
+        elif [ "$LIVE_MSG" -eq 0 ] && [ "$DEAD_MSG" -gt 3 ]; then
+            log "FAIL cloudflared — $DEAD_MSG dead events, 0 live connections in last 40 lines, restarting"
+            restart_service "com.cloudflared-zettair"
         else
-            log "WARN cloudflared — no recent connection lines, restarting to be safe"
-            restart_service "com.cloudflared-zettair"
+            log "OK cloudflared (live=$LIVE_MSG dead=$DEAD_MSG)"
         fi
     else
         log "FAIL cloudflared — process not found, restarting"
