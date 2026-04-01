@@ -11,6 +11,9 @@ from datetime import datetime, timezone, timedelta
 
 LOG_PATH = os.path.join(os.path.dirname(__file__), "logs", "queries.jsonl")
 
+# Queries to exclude from the digest (health checks, test queries, etc.)
+DIGEST_BLOCKLIST = {"test"}
+
 def load_queries(since_hours=24):
     cutoff = datetime.now(timezone.utc) - timedelta(hours=since_hours)
     queries = []
@@ -25,7 +28,9 @@ def load_queries(since_hours=24):
                 rec = json.loads(line)
                 ts = datetime.fromisoformat(rec["ts"].replace("Z", "+00:00"))
                 if ts >= cutoff:
-                    queries.append(rec["q"].lower().strip())
+                    q = rec["q"].lower().strip()
+                    if q not in DIGEST_BLOCKLIST:
+                        queries.append(q)
             except Exception:
                 continue
     return queries
