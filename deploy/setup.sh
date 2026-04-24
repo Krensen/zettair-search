@@ -101,14 +101,26 @@ log "Building search index (this takes ~5–20 min)..."
 mkdir -p "$INSTALL_DIR/zettair/wikiindex"
 if [ ! -f "$INSTALL_DIR/zettair/wikiindex/index.cfg" ]; then
     cd "$INSTALL_DIR/zettair/wikiindex"
-    ../devel/zet -i --okapi -f index ../wikipedia/simplewiki.trec
+    ../devel/zet -i -f index ../wikipedia/simplewiki.trec
 fi
 
 ### ── 7. Download clickstream files ─────────────────────────────────────────
 
 log "Downloading Wikipedia clickstream data (15 months, ~6.5GB total)..."
 cd "$INSTALL_DIR/zettair/wikipedia"
-python3 refresh_clickstream.py
+
+for MONTH in 2024-01 2024-02 2024-03 2024-04 2024-05 2024-06 \
+             2024-07 2024-08 2024-09 2024-10 2024-11 2024-12 \
+             2025-01 2025-02 2025-03; do
+    FILE="clickstream-enwiki-${MONTH}.tsv.gz"
+    if [ ! -f "$FILE" ]; then
+        log "  Downloading $MONTH..."
+        wget -q --show-progress \
+            "https://dumps.wikimedia.org/other/clickstream/${MONTH}/${FILE}" \
+            -O "$FILE" || { log "  WARNING: $MONTH not available yet, skipping"; rm -f "$FILE"; }
+        sleep 2  # be polite to Wikimedia
+    fi
+done
 
 ### ── 8. Build pipeline: docno map, click prior, autosuggest, docstore ───────
 
