@@ -81,9 +81,10 @@ mkdir -p "$INSTALL_DIR/zettair/wikipedia"
 cd "$INSTALL_DIR/zettair/wikipedia"
 
 if [ ! -f simplewiki.xml ]; then
-    wget -q --show-progress -O simplewiki.xml.bz2 "$WIKI_DUMP_URL"
+    wget -q --show-progress -O simplewiki-latest.xml.bz2 "$WIKI_DUMP_URL"
     log "Decompressing dump (~1.5GB)..."
-    bunzip2 simplewiki.xml.bz2
+    bunzip2 simplewiki-latest.xml.bz2
+    mv simplewiki-latest.xml simplewiki.xml
 fi
 
 ### ── 5. Convert to TREC + extract sidecars ──────────────────────────────────
