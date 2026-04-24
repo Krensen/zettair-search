@@ -1,0 +1,15 @@
+[Unit]
+Description=Cloudflare Tunnel
+After=network.target
+
+[Service]
+Type=simple
+User=cloudflared
+ExecStart=/usr/bin/cloudflared tunnel --protocol http2 run zettair-search
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

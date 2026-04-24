@@ -1,349 +1,243 @@
 # Zettair Wikipedia Search
 
-A full-text BM25 search engine over Simple English Wikipedia, running locally on a Mac with a permanent public URL via Cloudflare Tunnel.
+A full-text BM25 search engine over Simple English Wikipedia (~256k articles), with query-biased summaries, click-prior ranking, and autosuggest from real Wikipedia clickstream data.
+
+Live at: **https://search.hughwilliams.com**
 
 ---
 
 ## What it is
 
-- **Search engine:** Zettair (BM25/Okapi), patched for Apple Silicon
-- **Backend:** FastAPI Python server wrapping the `zet` CLI
-- **Frontend:** Single-file Google-style HTML/JS UI with Paul Smith styling, autosuggest, knowledge panel, image thumbnails
-- **Data:** Simple English Wikipedia (~256k articles, ~64k images)
-- **Autosuggest:** 152k queries derived from Wikipedia clickstream (15 months, decay-weighted)
-- **Tunnel:** Cloudflare named tunnel → permanent public HTTPS URL
+- **Search engine:** [Zettair](https://github.com/Krensen/zettair) (BM25/Okapi), patched for ARM + click-prior ranking + JSON output
+- **Backend:** FastAPI + persistent worker pool (50× lower latency than per-query subprocess)
+- **Frontend:** Single-file Google-style HTML/JS — autosuggest, knowledge panel, thumbnails, query-term highlighting
+- **Summaries:** Query-biased snippet generation (port of Turpin, Hawking & Williams, SIGIR 2003)
+- **Autosuggest:** 152k queries ranked by 15 months of Wikipedia clickstream data (decay-weighted)
+- **Click prior:** Per-article click scores baked into BM25 ranking inline (not post-ranking)
 
 ---
 
-## Prerequisites
+## Repos
 
-- macOS (Apple Silicon or Intel)
-- Homebrew
-- A Cloudflare account with your domain's nameservers pointed at Cloudflare
-- ~12GB free disk space (XML dump + index + clickstream files)
-- ~60 min for full setup (most of it is downloads)
+| Repo | Contents |
+|------|----------|
+| [`Krensen/zettair`](https://github.com/Krensen/zettair) | Patched Zettair C source + Wikipedia pipeline scripts |
+| [`Krensen/zettair-search`](https://github.com/Krensen/zettair-search) | FastAPI server, frontend, deploy scripts, PRDs |
 
 ---
 
-## Step 1 — Install dependencies
+## Quick start (fresh VPS)
 
 ```bash
-brew install python@3.11 cloudflared git
+# Clone the service repo and run the one-time setup script
+git clone https://github.com/Krensen/zettair-search.git
+bash zettair-search/deploy/setup.sh
+```
+
+`setup.sh` handles everything: installs deps, clones both repos, builds the binary, downloads and indexes Wikipedia, builds all data files, installs systemd services. See below for details.
+
+---
+
+## Full setup walkthrough
+
+### Prerequisites
+
+- Ubuntu 24.04 (ARM64 or x86_64) — tested on Hetzner CAX21 (ARM, €5.49/mo)
+- ~25GB free disk space
+- ~60–90 min for full setup (mostly downloads + indexing)
+
+### Step 1 — Install dependencies
+
+```bash
+apt-get update && apt-get install -y \
+    python3 python3-pip git gcc make autoconf automake libtool libz-dev curl wget bzip2
 pip3 install fastapi uvicorn
 ```
 
----
-
-## Step 2 — Clone the repos
+### Step 2 — Clone repos
 
 ```bash
-mkdir -p ~/search && cd ~/search
-
-# Search service (server + frontend)
+cd /opt
 git clone https://github.com/Krensen/zettair-search.git
-
-# Zettair engine (patched source)
 git clone https://github.com/Krensen/zettair.git
 ```
 
-Your layout will be:
-```
-~/search/
-  zettair-search/    ← FastAPI server + frontend
-  zettair/           ← Zettair source + wiki tools
-```
-
----
-
-## Step 3 — Build Zettair
+### Step 3 — Build Zettair
 
 ```bash
-cd ~/search/zettair/devel
+cd /opt/zettair/devel
 
-# Apple Silicon (M1/M2/M3/M4)
-./configure --build=arm-apple-darwin
+# ARM64 (Hetzner CAX, Apple Silicon)
+./configure --build=aarch64-unknown-linux-gnu   # Linux ARM
+./configure --build=arm-apple-darwin            # macOS ARM
 
-# Intel Mac
+# x86_64
 ./configure
 
 make
 ```
 
-Binary will be at `~/search/zettair/devel/zet`.
+Binary: `devel/zet`
 
----
-
-## Step 4 — Download Simple English Wikipedia
+### Step 4 — Download Wikipedia dump
 
 ```bash
-mkdir -p ~/search/zettair/wikipedia
-cd ~/search/zettair/wikipedia
-
-# Download the latest dump (~330MB compressed)
-curl -O https://dumps.wikimedia.org/simplewiki/latest/simplewiki-latest-pages-articles.xml.bz2
-
-# Decompress (~1.5GB uncompressed — takes a few minutes)
-bunzip2 simplewiki-latest-pages-articles.xml.bz2
+cd /opt/zettair/wikipedia
+wget -O simplewiki.xml.bz2 \
+    https://dumps.wikimedia.org/simplewiki/latest/simplewiki-latest-pages-articles.xml.bz2
+bunzip2 simplewiki.xml.bz2
 mv simplewiki-latest-pages-articles.xml simplewiki.xml
 ```
 
----
+~330MB download, ~1.5GB decompressed.
 
-## Step 5 — Convert to TREC format + extract snippets/images
+### Step 5 — Convert to TREC + extract sidecars
 
 ```bash
-cd ~/search/zettair/wikipedia
-python3 wiki2trec.py
+python3 wiki2trec.py simplewiki.xml simplewiki.trec
 ```
 
 Produces:
-- `simplewiki.trec` — Zettair input format
-- `simplewiki_snippets.json` — clean prose snippets per article
-- `simplewiki_images.json` — Wikimedia CDN image URLs per article
-- `simplewiki_titles.txt` — article title list (used by autosuggest pipeline)
+- `simplewiki.trec` — Zettair input (~406MB)
+- `simplewiki_snippets.json` — pre-baked fallback snippets (~87MB)
+- `simplewiki_images.json` — Wikimedia image URLs (~9MB)
 
-Takes ~5–10 minutes.
+Takes ~5 min.
 
----
-
-## Step 6 — Index with Zettair
+### Step 6 — Build search index
 
 ```bash
-mkdir -p ~/search/zettair/wikiindex
-cd ~/search/zettair/wikiindex
-
-../devel/zet -i -f index ../wikipedia/simplewiki.trec
+mkdir -p /opt/zettair/wikiindex
+cd /opt/zettair/wikiindex
+../devel/zet -i --okapi -f index ../wikipedia/simplewiki.trec
 ```
 
-Takes ~5 minutes. Produces `index.*` files in `wikiindex/`.
+Takes ~5–20 min. Produces `wikiindex/index.*`.
 
----
-
-## Step 7 — Download Wikipedia clickstream data (autosuggest)
-
-This gives you real search popularity data for 256k articles.
+### Step 7 — Download clickstream data
 
 ```bash
-cd ~/search/zettair/wikipedia
-
-# Download 15 months of English Wikipedia clickstream (~6.5GB total)
-# Do these sequentially to avoid Wikimedia rate limiting
-for month in 2024-01 2024-02 2024-03 2024-04 2024-05 2024-06 \
-             2024-07 2024-08 2024-09 2024-10 2024-11 2024-12 \
-             2025-01 2025-02 2025-03; do
-  f="clickstream-enwiki-${month}.tsv.gz"
-  echo "Downloading $month..."
-  curl -O "https://dumps.wikimedia.org/other/clickstream/${month}/${f}"
-  sleep 2
-done
+cd /opt/zettair/wikipedia
+python3 refresh_clickstream.py
 ```
 
-Takes ~30–45 minutes depending on your connection.
+Downloads 15 months of English Wikipedia clickstream (~6.5GB total). Rate-limited to be polite to Wikimedia.
 
----
-
-## Step 8 — Build autosuggest index
+### Step 8 — Build docno map
 
 ```bash
-cd ~/search/zettair/wikipedia
+python3 build_docno_map.py
+```
+
+Produces `docno_map.tsv` — maps sequential Zettair docno integers to article titles. ~1 min.
+
+### Step 9 — Build click prior
+
+```bash
+python3 build_click_prior.py
+```
+
+Aggregates 15 months of clickstream with exponential decay into `click_prior.bin` — a float32 array indexed by docno. ~4 min.
+
+The click prior is loaded by Zettair at startup and applied inline during BM25 scoring (not post-ranking). Strength controlled by `ZET_CLICK_ALPHA` (default 0.5).
+
+### Step 10 — Build autosuggest index
+
+```bash
 python3 build_autosuggest.py
 ```
 
-Produces `autosuggest.json` — 152k query+popularity pairs, sorted for binary search. Takes ~10 minutes (processes all 15 months with decay weighting).
+Produces `autosuggest.json` — 152k (query, count) pairs sorted for binary search. Fired after 2 chars, 150ms debounce, 8 suggestions max. ~10 min.
 
----
-
-## Step 9 — Build click prior (improves ranking of popular articles)
+### Step 11 — Build docstore
 
 ```bash
-cd ~/search/zettair/wikipedia
-python3 build_docno_map.py   # ~1 min — maps docno → title
-python3 build_click_prior.py # ~4 min — aggregates clickstream into click_prior.bin
+python3 build_docstore.py
 ```
 
 Produces:
-- `docno_map.tsv` — sequential docno → article title mapping
-- `click_prior.bin` — float32 array of decayed click scores per article (~1MB)
+- `simplewiki.docstore` — full article text, concatenated (~350MB)
+- `simplewiki.docmap` — byte offsets for O(1) random access by docno (~9MB)
 
----
+Used by the query-biased summariser (`summarise.py`) to generate snippets at query time. ~30 sec.
 
-## Step 10 — Run the search server
+### Step 12 — Start the server
 
 ```bash
-cd ~/search/zettair-search
+cd /opt/zettair-search
 
-ZET_BINARY=~/search/zettair/devel/zet \
-ZET_INDEX=~/search/zettair/wikiindex/index \
+ZET_BINARY=/opt/zettair/devel/zet \
+ZET_INDEX=/opt/zettair/wikiindex/index \
+ZET_CLICK_PRIOR=/opt/zettair/wikipedia/click_prior.bin \
+ZET_CLICK_ALPHA=0.5 \
+ZET_WORKERS=2 \
+ZET_SUMMARISE=1 \
+ZET_DOCSTORE=/opt/zettair/wikipedia/simplewiki.docstore \
+ZET_DOCMAP=/opt/zettair/wikipedia/simplewiki.docmap \
 python3 server.py
 ```
 
-The click prior is loaded automatically if `click_prior.bin` is present at the default path. Tune with:
+Test: `curl http://localhost:8765/search?q=london`
+
+On first start, loads ~100MB of sidecar data into memory (~10 sec).
+
+### Step 13 — Systemd services
+
 ```bash
-ZET_CLICK_ALPHA=0.5  # default — higher = stronger click boost
+cp deploy/zettair-search.service /etc/systemd/system/
+cp deploy/cloudflared.service    /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now zettair-search cloudflared
 ```
 
-Test locally: http://localhost:8765
-
-The server loads snippets, images, and autosuggest into memory on startup (~10 seconds).
-
----
-
-## Step 11 — Set up Cloudflare Tunnel (permanent public URL)
-
-### 10a. Log in to Cloudflare
+### Step 14 — Cloudflare tunnel
 
 ```bash
+# On your local machine:
 cloudflared tunnel login
-```
-
-This opens a browser. Authorise your domain. A cert is saved to `~/.cloudflared/cert.pem`.
-
-### 10b. Create the tunnel
-
-```bash
 cloudflared tunnel create zettair-search
-```
+cloudflared tunnel route dns zettair-search search.yourdomain.com
 
-Note the **tunnel ID** printed. Credentials saved to `~/.cloudflared/<tunnel-id>.json`.
+# Copy credentials to VPS:
+scp ~/.cloudflared/<tunnel-id>.json root@VPS_IP:/etc/cloudflared/
 
-### 10c. Create the config file
-
-```bash
-cat > ~/.cloudflared/config.yml << EOF
-tunnel: <YOUR-TUNNEL-ID>
-credentials-file: /Users/<YOUR-USERNAME>/.cloudflared/<YOUR-TUNNEL-ID>.json
-
+# On VPS, create config:
+cat > /etc/cloudflared/config.yml << EOF
+tunnel: <tunnel-id>
+credentials-file: /etc/cloudflared/<tunnel-id>.json
+protocol: http2
 ingress:
   - hostname: search.yourdomain.com
     service: http://localhost:8765
   - service: http_status:404
 EOF
-```
 
-### 10d. Add the DNS record
-
-```bash
-cloudflared tunnel route dns zettair-search search.yourdomain.com
-```
-
-### 10e. Run tunnel as a background service
-
-```bash
-sudo cloudflared service install
-sudo launchctl start com.cloudflare.cloudflared
-```
-
-Your search engine is now live at `https://search.yourdomain.com`.
-
----
-
-## Step 12 — Auto-start the search server on boot
-
-```bash
-cat > ~/Library/LaunchAgents/com.zettair.search.plist << EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.zettair.search</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/opt/homebrew/bin/python3</string>
-    <string>/Users/YOUR_USERNAME/search/zettair-search/server.py</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>ZET_BINARY</key>
-    <string>/Users/YOUR_USERNAME/search/zettair/devel/zet</string>
-    <key>ZET_INDEX</key>
-    <string>/Users/YOUR_USERNAME/search/zettair/wikiindex/index</string>
-  </dict>
-  <key>WorkingDirectory</key>
-  <string>/Users/YOUR_USERNAME/search/zettair-search</string>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>/tmp/zettair.log</string>
-  <key>StandardErrorPath</key>
-  <string>/tmp/zettair.err</string>
-</dict>
-</plist>
-EOF
-
-# Replace YOUR_USERNAME throughout, then:
-launchctl load ~/Library/LaunchAgents/com.zettair.search.plist
+systemctl restart cloudflared
 ```
 
 ---
 
-## Step 13 — Set up monthly clickstream refresh (auto-updates autosuggest)
+## CI/CD
 
-A cron job checks for new clickstream data from the 10th of each month, downloads it, rebuilds `autosuggest.json` automatically.
+Every push to `main` on `zettair-search` triggers a GitHub Actions workflow that SSHs to the VPS and runs `deploy/deploy.sh` (git pull + pip install + systemctl restart).
 
-Configure this via your OpenClaw instance:
-```
-Run daily from 10th: python3 ~/search/zettair/wikipedia/refresh_clickstream.py
-```
+Setup:
+1. Generate a deploy key: `ssh-keygen -t ed25519 -f deploy_key`
+2. Add `deploy_key.pub` to the VPS: `~/.ssh/authorized_keys` (for a `deploy` user)
+3. Add `deploy_key` (private) as GitHub secret `VPS_SSH_KEY`
+4. Add VPS IP as secret `VPS_IP`
 
-Or add a crontab entry:
+See `.github/workflows/deploy.yml`.
+
+---
+
+## Monthly clickstream refresh
+
+A cron job runs `refresh_clickstream.py` daily from the 10th–28th of each month. When a new month's data is available it downloads it, rebuilds `autosuggest.json` and `click_prior.bin`, and sends a Telegram notification.
+
 ```bash
-# Runs daily at 6am from the 10th–28th of each month
-0 6 10-28 * * python3 /Users/YOUR_USERNAME/search/zettair/wikipedia/refresh_clickstream.py
-```
-
----
-
-## Checkpoints (git tags)
-
-| Tag | Description |
-|-----|-------------|
-| `checkpoint-0` | Working engine, basic UI |
-| `checkpoint-1` | Snippets, images, clickable links |
-| `checkpoint-1b` | Google-style result cards |
-| `checkpoint-2` | Query + click logging, daily digest |
-| `checkpoint-3` | Autosuggest live |
-| `checkpoint-4` | Paul Smith styling, multi-month clickstream, PRD-006 spec |
-| `checkpoint-5` | Click prior live (α=0.5), persistent process spec (PRD-007) ← current |
-
-Roll back with: `git checkout checkpoint-X`
-
----
-
-## Directory structure
-
-```
-zettair-search/
-  server.py          ← FastAPI server (search, image proxy, autosuggest, logging)
-  index.html         ← Single-file frontend (no build step)
-  digest.py          ← Daily query digest script
-  logs/              ← queries.jsonl, clicks.jsonl, clickstream_refresh.jsonl
-  prd/               ← Product requirement docs
-  README.md          ← This file
-
-zettair/
-  devel/
-    zet              ← Compiled binary (gitignored — build from source)
-    src/             ← Patched C source (ARM fixes, strvlen inline)
-  wikipedia/
-    wiki2trec.py          ← XML dump → TREC + snippets/images JSON
-    build_autosuggest.py      ← Clickstream → autosuggest.json (with decay)
-    build_docno_map.py        ← TREC file → docno_map.tsv
-    build_click_prior.py      ← Clickstream → click_prior.bin (float32, decay-weighted)
-    refresh_clickstream.py    ← Monthly auto-download + rebuild
-    simplewiki.xml            ← Wikipedia dump (gitignored)
-    simplewiki.trec        ← TREC format (gitignored)
-    simplewiki_snippets.json  ← (gitignored)
-    simplewiki_images.json    ← (gitignored)
-    simplewiki_titles.txt     ← (gitignored)
-    autosuggest.json              ← (gitignored)
-    docno_map.tsv                 ← (gitignored)
-    click_prior.bin               ← (gitignored)
-    clickstream-enwiki-*.tsv.gz   ← (gitignored — ~6.5GB)
-  wikiindex/
-    index.*          ← Zettair index files (gitignored)
+# Crontab entry (adjust path):
+0 6 10-28 * * /usr/bin/python3 /opt/zettair/wikipedia/refresh_clickstream.py
 ```
 
 ---
@@ -354,41 +248,102 @@ zettair/
 |----------|---------|-------------|
 | `ZET_BINARY` | `../zettair/devel/zet` | Path to compiled zet binary |
 | `ZET_INDEX` | `../zettair/wikiindex/index` | Path to Zettair index |
-| `ZET_PORT` | `8765` | Port to listen on |
-| `ZET_SNIPPETS` | `../zettair/wikipedia/simplewiki_snippets.json` | Snippets sidecar |
-| `ZET_IMAGES` | `../zettair/wikipedia/simplewiki_images.json` | Images sidecar |
+| `ZET_PORT` | `8765` | HTTP port |
+| `ZET_WORKERS` | `2` | Persistent zet worker processes |
+| `ZET_QUERY_TIMEOUT` | `5.0` | Per-query timeout (seconds) |
+| `ZET_CLICK_PRIOR` | `../zettair/wikipedia/click_prior.bin` | Click prior binary |
+| `ZET_CLICK_ALPHA` | `0.5` | Click boost strength (0 = off, 1.5 = strong) |
+| `ZET_SUMMARISE` | `0` | Enable query-biased summaries (`1` to enable) |
+| `ZET_DOCSTORE` | `../zettair/wikipedia/simplewiki.docstore` | Full-text docstore |
+| `ZET_DOCMAP` | `../zettair/wikipedia/simplewiki.docmap` | Docstore offset map |
+| `ZET_SNIPPETS` | `../zettair/wikipedia/simplewiki_snippets.json` | Fallback snippets |
+| `ZET_IMAGES` | `../zettair/wikipedia/simplewiki_images.json` | Image URLs |
 | `ZET_AUTOSUGGEST` | `../zettair/wikipedia/autosuggest.json` | Autosuggest data |
-| `ZET_QUERY_LOG` | `logs/queries.jsonl` | Query log path |
-| `ZET_CLICK_LOG` | `logs/clicks.jsonl` | Click log path |
-| `ZET_CLICK_PRIOR` | `../zettair/wikipedia/click_prior.bin` | Click prior binary (auto-detected) |
-| `ZET_CLICK_ALPHA` | `0.5` | Click boost strength (0 = disabled) |
+| `ZET_SUMM_TIMEOUT` | `2.0` | Summariser timeout (seconds) |
+
+---
+
+## Architecture
+
+```
+Browser
+  │  HTTPS
+  ▼
+Cloudflare edge
+  │  HTTP/2 tunnel
+  ▼
+cloudflared (VPS)
+  │  localhost
+  ▼
+server.py (FastAPI)  ← loads snippets, images, autosuggest, docstore into RAM
+  │
+  ├── ZetPool (2 workers) ─── zet binary (index memory-mapped)
+  │     stdin: query text
+  │     stdout: JSON Lines results
+  │
+  └── SummarisePool (1 worker) ─── summarise.py
+        stdin: {terms, docs} JSON
+        stdout: {summaries} JSON
+```
+
+---
+
+## Git tags
+
+| Tag | Description |
+|-----|-------------|
+| `checkpoint-0` | Working engine, basic UI |
+| `checkpoint-1` | Snippets, images, Google-style cards |
+| `checkpoint-2` | Query/click logging, daily digest |
+| `checkpoint-3` | Autosuggest live |
+| `checkpoint-4` | Paul Smith styling, multi-month clickstream |
+| `checkpoint-5` | Click prior live (α=0.5) |
+| `checkpoint-6` | Persistent worker pool (PRD-007, 50× speedup) |
+| `checkpoint-7` | Query-biased summaries (PRD-008) |
 
 ---
 
 ## Troubleshooting
 
-**Server won't start — port in use:**
+**Server won't start:**
 ```bash
-lsof -ti:8765 | xargs kill
+journalctl -u zettair-search -n 50
 ```
 
-**Images not loading:**
-Images are proxied through `/img?url=...` — Wikimedia CDN blocks direct browser requests. If images break, check the server is running.
+**Summariser slow or falling back to pre-baked snippets:**
+Check `ZET_SUMMARISE=1` is set and `simplewiki.docstore` exists.
 
-**Autosuggest not working:**
-Check `autosuggest.json` exists. Rebuild with `python3 build_autosuggest.py`.
+**Autosuggest empty:**
+Rebuild: `python3 /opt/zettair/wikipedia/build_autosuggest.py`
 
-**Cloudflare tunnel disconnected:**
+**Cloudflare tunnel drops:**
 ```bash
-sudo launchctl start com.cloudflare.cloudflared
+systemctl restart cloudflared
+journalctl -u cloudflared -n 30
 ```
 
-**Re-index after a new Wikipedia dump:**
+**Re-index after new Wikipedia dump:**
 ```bash
-cd ~/search/zettair/wikipedia
-python3 wiki2trec.py
-cd ../wikiindex && rm -f index.*
-../devel/zet -i -f index ../wikipedia/simplewiki.trec
-python3 ../wikipedia/build_autosuggest.py  # rebuild autosuggest too
-# restart server.py
+cd /opt/zettair/wikipedia
+python3 wiki2trec.py simplewiki.xml simplewiki.trec
+cd /opt/zettair/wikiindex && rm -f index.*
+../devel/zet -i --okapi -f index ../wikipedia/simplewiki.trec
+python3 build_docno_map.py
+python3 build_click_prior.py
+python3 build_autosuggest.py
+python3 build_docstore.py
+systemctl restart zettair-search
 ```
+
+---
+
+## Full English Wikipedia (future)
+
+When ready to index all ~6.7M English Wikipedia articles:
+1. Resize VPS disk to 160GB+ (Hetzner: online, no downtime)
+2. Upgrade to a box with 8–16GB RAM
+3. Download `enwiki-latest-pages-articles.xml.bz2` (~23GB)
+4. Run the same pipeline — `wiki2trec.py`, `zet -i`, build sidecars
+5. Update `ZET_*` env vars to point at new paths, restart
+
+Code doesn't change. The sidecar JSON loading may need to be redesigned for the full corpus (SQLite or mmap instead of loading into RAM).

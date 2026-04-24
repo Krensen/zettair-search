@@ -1,0 +1,30 @@
+[Unit]
+Description=Zettair Search Service
+After=network.target
+
+[Service]
+Type=simple
+User=zettair
+WorkingDirectory=/opt/zettair-search
+
+Environment=ZET_BINARY=/opt/zettair/devel/zet
+Environment=ZET_INDEX=/opt/zettair/wikiindex/index
+Environment=ZET_CLICK_PRIOR=/opt/zettair/wikipedia/click_prior.bin
+Environment=ZET_CLICK_ALPHA=0.5
+Environment=ZET_WORKERS=2
+Environment=ZET_QUERY_TIMEOUT=5.0
+Environment=ZET_SUMMARISE=1
+Environment=ZET_DOCSTORE=/opt/zettair/wikipedia/simplewiki.docstore
+Environment=ZET_DOCMAP=/opt/zettair/wikipedia/simplewiki.docmap
+Environment=ZET_SNIPPETS=/opt/zettair/wikipedia/simplewiki_snippets.json
+Environment=ZET_IMAGES=/opt/zettair/wikipedia/simplewiki_images.json
+Environment=ZET_AUTOSUGGEST=/opt/zettair/wikipedia/autosuggest.json
+
+ExecStart=/usr/bin/python3 server.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
