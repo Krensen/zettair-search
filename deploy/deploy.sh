@@ -18,7 +18,7 @@ log "Installing Python dependencies..."
 pip3 install --quiet --break-system-packages -r requirements.txt
 
 log "Restarting service..."
-systemctl restart zettair-search
+sudo systemctl restart zettair-search
 
 log "Waiting for server to come up..."
 sleep 5
