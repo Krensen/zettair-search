@@ -13,7 +13,7 @@
 #   1. Install system dependencies
 #   2. Clone both repos
 #   3. Build Zettair binary
-#   4. Download English Wikipedia dump
+#   4. Fetch Wikipedia Vital Articles Level 5 (~50K articles)
 #   5. Convert dump → TREC + sidecar files
 #   6. Build Zettair index
 #   7. Download clickstream files (15 months)
@@ -33,7 +33,6 @@ set -euo pipefail
 INSTALL_DIR=/opt
 ZETTAIR_SEARCH_REPO=https://github.com/Krensen/zettair-search.git
 ZETTAIR_REPO=https://github.com/Krensen/zettair.git
-WIKI_DUMP_URL=https://dumps.wikimedia.org/enwiki/latest/enwiki-latest-pages-articles.xml.bz2
 SERVICE_USER=zettair
 
 log() { echo "$(date '+%H:%M:%S') ── $*"; }
@@ -45,7 +44,7 @@ apt-get update -qq
 apt-get install -y -qq \
     python3 python3-pip python3-venv \
     git gcc make autoconf automake libtool pkg-config \
-    libz-dev curl wget bzip2
+    libz-dev curl wget
 
 pip3 install --quiet --break-system-packages fastapi uvicorn
 
@@ -74,34 +73,32 @@ fi
 make -j"$(nproc)"
 log "Binary at: $INSTALL_DIR/zettair/devel/zet"
 
-### ── 4. Download Wikipedia dump ────────────────────────────────────────────
+### ── 4. Fetch Wikipedia Vital Articles (Level 5, ~50K articles) ─────────────
 
-log "Downloading English Wikipedia dump (~22GB)..."
+log "Fetching Wikipedia Vital Articles Level 5 (~50K articles, takes ~2 hours)..."
 mkdir -p "$INSTALL_DIR/zettair/wikipedia"
 cd "$INSTALL_DIR/zettair/wikipedia"
 
-if [ ! -f enwiki.xml ]; then
-    wget -q --show-progress -O enwiki-latest.xml.bz2 "$WIKI_DUMP_URL"
-    log "Decompressing dump (~90GB uncompressed, takes a while)..."
-    bunzip2 enwiki-latest.xml.bz2
-    mv enwiki-latest.xml enwiki.xml
+if [ ! -f vital_articles_level5.xml ]; then
+    python3 fetch_vital_articles.py --level 5
 fi
 
 ### ── 5. Convert to TREC + extract sidecars ──────────────────────────────────
 
-log "Converting XML → TREC (this takes several hours for full enwiki)..."
-if [ ! -f enwiki.trec ]; then
-    python3 wiki2trec.py enwiki.xml enwiki.trec
+log "Converting XML → TREC (~10 min)..."
+if [ ! -f vital_articles_level5.trec ]; then
+    python3 wiki2trec.py vital_articles_level5.xml vital_articles_level5.trec
 fi
-# Produces: enwiki.trec, enwiki_snippets.json, enwiki_images.json
+# Produces: vital_articles_level5.trec, vital_articles_level5_snippets.store/map,
+#           vital_articles_level5_images.store/map
 
 ### ── 6. Build Zettair index ────────────────────────────────────────────────
 
-log "Building search index (this takes several hours for full enwiki)..."
+log "Building search index (~5 min)..."
 mkdir -p "$INSTALL_DIR/zettair/wikiindex"
 if [ ! -f "$INSTALL_DIR/zettair/wikiindex/index.cfg" ]; then
     cd "$INSTALL_DIR/zettair/wikiindex"
-    ../devel/zet -i -f index ../wikipedia/enwiki.trec
+    ../devel/zet -i -f index ../wikipedia/vital_articles_level5.trec
 fi
 
 ### ── 7. Download clickstream files ─────────────────────────────────────────
@@ -125,7 +122,7 @@ done
 ### ── 8. Build pipeline: docno map, click prior, autosuggest, docstore ───────
 
 log "Building docno map..."
-python3 build_docno_map.py
+python3 build_docno_map.py vital_articles_level5.trec
 
 log "Extracting titles list for autosuggest..."
 cut -f2 docno_map.tsv > enwiki_titles.txt
@@ -137,7 +134,7 @@ log "Building autosuggest index (~10 min)..."
 python3 build_autosuggest.py
 
 log "Building docstore for query-biased summaries (~30 sec)..."
-python3 build_docstore.py
+python3 build_docstore.py vital_articles_level5.trec
 
 ### ── 9. Create service user ────────────────────────────────────────────────
 
