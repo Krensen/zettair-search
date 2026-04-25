@@ -13,7 +13,7 @@
 #   1. Install system dependencies
 #   2. Clone both repos
 #   3. Build Zettair binary
-#   4. Download Simple English Wikipedia dump
+#   4. Download English Wikipedia dump
 #   5. Convert dump → TREC + sidecar files
 #   6. Build Zettair index
 #   7. Download clickstream files (15 months)
@@ -33,7 +33,7 @@ set -euo pipefail
 INSTALL_DIR=/opt
 ZETTAIR_SEARCH_REPO=https://github.com/Krensen/zettair-search.git
 ZETTAIR_REPO=https://github.com/Krensen/zettair.git
-WIKI_DUMP_URL=https://dumps.wikimedia.org/simplewiki/latest/simplewiki-latest-pages-articles.xml.bz2
+WIKI_DUMP_URL=https://dumps.wikimedia.org/enwiki/latest/enwiki-latest-pages-articles.xml.bz2
 SERVICE_USER=zettair
 
 log() { echo "$(date '+%H:%M:%S') ── $*"; }
@@ -76,32 +76,32 @@ log "Binary at: $INSTALL_DIR/zettair/devel/zet"
 
 ### ── 4. Download Wikipedia dump ────────────────────────────────────────────
 
-log "Downloading Simple English Wikipedia dump (~330MB)..."
+log "Downloading English Wikipedia dump (~22GB)..."
 mkdir -p "$INSTALL_DIR/zettair/wikipedia"
 cd "$INSTALL_DIR/zettair/wikipedia"
 
-if [ ! -f simplewiki.xml ]; then
-    wget -q --show-progress -O simplewiki-latest.xml.bz2 "$WIKI_DUMP_URL"
-    log "Decompressing dump (~1.5GB)..."
-    bunzip2 simplewiki-latest.xml.bz2
-    mv simplewiki-latest.xml simplewiki.xml
+if [ ! -f enwiki.xml ]; then
+    wget -q --show-progress -O enwiki-latest.xml.bz2 "$WIKI_DUMP_URL"
+    log "Decompressing dump (~90GB uncompressed, takes a while)..."
+    bunzip2 enwiki-latest.xml.bz2
+    mv enwiki-latest.xml enwiki.xml
 fi
 
 ### ── 5. Convert to TREC + extract sidecars ──────────────────────────────────
 
-log "Converting XML → TREC (this takes ~5 min)..."
-if [ ! -f simplewiki.trec ]; then
-    python3 wiki2trec.py simplewiki.xml simplewiki.trec
+log "Converting XML → TREC (this takes several hours for full enwiki)..."
+if [ ! -f enwiki.trec ]; then
+    python3 wiki2trec.py enwiki.xml enwiki.trec
 fi
-# Produces: simplewiki.trec, simplewiki_snippets.json, simplewiki_images.json
+# Produces: enwiki.trec, enwiki_snippets.json, enwiki_images.json
 
 ### ── 6. Build Zettair index ────────────────────────────────────────────────
 
-log "Building search index (this takes ~5–20 min)..."
+log "Building search index (this takes several hours for full enwiki)..."
 mkdir -p "$INSTALL_DIR/zettair/wikiindex"
 if [ ! -f "$INSTALL_DIR/zettair/wikiindex/index.cfg" ]; then
     cd "$INSTALL_DIR/zettair/wikiindex"
-    ../devel/zet -i -f index ../wikipedia/simplewiki.trec
+    ../devel/zet -i -f index ../wikipedia/enwiki.trec
 fi
 
 ### ── 7. Download clickstream files ─────────────────────────────────────────
@@ -124,21 +124,11 @@ done
 
 ### ── 8. Build pipeline: docno map, click prior, autosuggest, docstore ───────
 
-log "Extracting article titles..."
-python3 -c "
-import json
-with open('simplewiki_snippets.json') as f:
-    titles = list(json.load(f).keys())
-with open('simplewiki_titles.txt', 'w') as f:
-    f.write('\n'.join(titles))
-print(f'{len(titles):,} titles written')
-"
-
 log "Building docno map..."
 python3 build_docno_map.py
 
 log "Extracting titles list for autosuggest..."
-cut -f2 docno_map.tsv > simplewiki_titles.txt
+cut -f2 docno_map.tsv > enwiki_titles.txt
 
 log "Building click prior..."
 python3 build_click_prior.py
