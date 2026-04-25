@@ -2,7 +2,7 @@
 
 A full-text BM25 search engine over Simple English Wikipedia (~256k articles), with query-biased summaries, click-prior ranking, and autosuggest from real Wikipedia clickstream data.
 
-Live at: **https://search.hughwilliams.com**
+Live at: **https://zettair.io**
 
 ---
 
