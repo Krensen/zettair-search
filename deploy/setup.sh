@@ -124,6 +124,16 @@ done
 
 ### ── 8. Build pipeline: docno map, click prior, autosuggest, docstore ───────
 
+log "Extracting article titles..."
+python3 -c "
+import json
+with open('simplewiki_snippets.json') as f:
+    titles = list(json.load(f).keys())
+with open('simplewiki_titles.txt', 'w') as f:
+    f.write('\n'.join(titles))
+print(f'{len(titles):,} titles written')
+"
+
 log "Building docno map..."
 python3 build_docno_map.py
 
