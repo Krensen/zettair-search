@@ -40,8 +40,8 @@ ZET_QUERY_TIMEOUT = float(os.environ.get("ZET_QUERY_TIMEOUT", "5.0"))
 ZET_SUMMARISE  = os.environ.get("ZET_SUMMARISE", "0") == "1"
 SUMMARISE_PY   = os.path.join(os.path.dirname(__file__), "summarise.py")
 _wiki_dir      = os.path.join(os.path.dirname(__file__), "../zettair/wikipedia")
-DOCSTORE_PATH  = os.environ.get("ZET_DOCSTORE",  os.path.join(_wiki_dir, "simplewiki.docstore"))
-DOCMAP_PATH    = os.environ.get("ZET_DOCMAP",    os.path.join(_wiki_dir, "simplewiki.docmap"))
+DOCSTORE_PATH  = os.environ.get("ZET_DOCSTORE",  os.path.join(_wiki_dir, "enwiki.docstore"))
+DOCMAP_PATH    = os.environ.get("ZET_DOCMAP",    os.path.join(_wiki_dir, "enwiki.docmap"))
 SUMM_TIMEOUT   = float(os.environ.get("ZET_SUMM_TIMEOUT", "2.0"))
 
 # Query + click log
@@ -61,43 +61,45 @@ async def _append_log(path: str, record: dict):
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 # Sidecar data paths
-SNIPPETS_PATH    = os.environ.get("ZET_SNIPPETS",    os.path.join(_wiki_dir, "simplewiki_snippets.json"))
-IMAGES_PATH      = os.environ.get("ZET_IMAGES",      os.path.join(_wiki_dir, "simplewiki_images.json"))
-AUTOSUGGEST_PATH = os.environ.get("ZET_AUTOSUGGEST", os.path.join(_wiki_dir, "autosuggest.json"))
+SNIPPETS_STORE_PATH = os.environ.get("ZET_SNIPPETS_STORE", os.path.join(_wiki_dir, "enwiki_snippets.store"))
+SNIPPETS_MAP_PATH   = os.environ.get("ZET_SNIPPETS_MAP",   os.path.join(_wiki_dir, "enwiki_snippets.map"))
+IMAGES_STORE_PATH   = os.environ.get("ZET_IMAGES_STORE",   os.path.join(_wiki_dir, "enwiki_images.store"))
+IMAGES_MAP_PATH     = os.environ.get("ZET_IMAGES_MAP",     os.path.join(_wiki_dir, "enwiki_images.map"))
+AUTOSUGGEST_PATH    = os.environ.get("ZET_AUTOSUGGEST",    os.path.join(_wiki_dir, "autosuggest.json"))
 
-# Sidecar data loaded at startup
-_snippets: dict = {}
-_images: dict = {}
 _autosuggest: list = []   # sorted list of (query, count) tuples
 
 
 # ---------------------------------------------------------------------------
-# Docstore reader — random-access full article text (PRD-008)
+# Flat store — random-access by docno via an offset map (snippets, images, docstore)
 # ---------------------------------------------------------------------------
 
-class DocStore:
-    """Memory-maps the docstore file; random-access by docno via docmap."""
+class FlatStore:
+    """Disk-based key→value store: flat UTF-8 file + JSON offset map."""
 
-    def __init__(self):
-        self._docmap: dict = {}
+    def __init__(self, store_path: str, map_path: str, label: str):
+        self._store_path = store_path
+        self._map_path = map_path
+        self._label = label
+        self._map: dict = {}
         self._fp = None
         self._loaded = False
 
     def load(self):
-        if not os.path.exists(DOCMAP_PATH) or not os.path.exists(DOCSTORE_PATH):
-            print(f"WARNING: docstore not found — summariser will use pre-baked snippets")
+        if not os.path.exists(self._map_path) or not os.path.exists(self._store_path):
+            print(f"WARNING: {self._label} not found — will be unavailable", flush=True)
             return
-        with open(DOCMAP_PATH, encoding="utf-8") as f:
-            self._docmap = json.load(f)
-        self._fp = open(DOCSTORE_PATH, "rb")
+        with open(self._map_path, encoding="utf-8") as f:
+            self._map = json.load(f)
+        self._fp = open(self._store_path, "rb")
         self._loaded = True
-        print(f"  Docstore loaded: {len(self._docmap):,} docs, {os.path.getsize(DOCSTORE_PATH)/1024/1024:.0f}MB", flush=True)
+        size_mb = os.path.getsize(self._store_path) / 1024 / 1024
+        print(f"  {self._label}: {len(self._map):,} entries, {size_mb:.0f}MB store", flush=True)
 
     def get(self, docno: str) -> str | None:
-        """Return full text for a docno, or None if not found."""
         if not self._loaded:
             return None
-        entry = self._docmap.get(docno)
+        entry = self._map.get(docno)
         if entry is None:
             return None
         offset, length = entry
@@ -105,10 +107,12 @@ class DocStore:
         return self._fp.read(length).decode("utf-8", errors="replace")
 
     def get_many(self, docnos: list[str]) -> dict[str, str]:
-        """Return {docno: text} for a list of docnos."""
         return {d: t for d in docnos if (t := self.get(d)) is not None}
 
-_docstore = DocStore()
+
+_snippets_store = FlatStore(SNIPPETS_STORE_PATH, SNIPPETS_MAP_PATH, "snippets")
+_images_store   = FlatStore(IMAGES_STORE_PATH,   IMAGES_MAP_PATH,   "images")
+_docstore       = FlatStore(DOCSTORE_PATH, DOCMAP_PATH, "docstore")
 
 
 # ---------------------------------------------------------------------------
@@ -361,9 +365,10 @@ _pool = ZetPool()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    await _load_sidecars()
-    if ZET_SUMMARISE:
-        _docstore.load()
+    _snippets_store.load()
+    _images_store.load()
+    _docstore.load()
+    await _load_autosuggest()
     await _pool.start(ZET_WORKERS)
     await _summ_pool.start()
     yield
@@ -375,25 +380,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Zettair Search Service", lifespan=lifespan)
 
 
-async def _load_sidecars():
-    global _snippets, _images, _autosuggest
-
-    if os.path.exists(SNIPPETS_PATH):
-        print(f"Loading snippets from {SNIPPETS_PATH}...", flush=True)
-        with open(SNIPPETS_PATH, encoding="utf-8") as f:
-            _snippets = json.load(f)
-        print(f"  Loaded {len(_snippets):,} snippets", flush=True)
-    else:
-        print(f"WARNING: snippets file not found: {SNIPPETS_PATH}")
-
-    if os.path.exists(IMAGES_PATH):
-        print(f"Loading images from {IMAGES_PATH}...", flush=True)
-        with open(IMAGES_PATH, encoding="utf-8") as f:
-            _images = json.load(f)
-        print(f"  Loaded {len(_images):,} images", flush=True)
-    else:
-        print(f"WARNING: images file not found: {IMAGES_PATH}")
-
+async def _load_autosuggest():
+    global _autosuggest
     if os.path.exists(AUTOSUGGEST_PATH):
         print(f"Loading autosuggest from {AUTOSUGGEST_PATH}...", flush=True)
         with open(AUTOSUGGEST_PATH, encoding="utf-8") as f:
@@ -412,14 +400,14 @@ def enrich_results(results: list, qb_snippets: dict | None = None) -> list:
         if qb_snippets and docno in qb_snippets and qb_snippets[docno]:
             snippet = qb_snippets[docno]
         else:
-            snippet = _snippets.get(docno, "")
+            snippet = _snippets_store.get(docno) or ""
         enriched.append({
             "rank": r["rank"],
             "score": r["score"],
             "docid": r["docid"],
             "docno": docno,
             "snippet": snippet,
-            "image_url": _images.get(docno),
+            "image_url": _images_store.get(docno),
         })
     return enriched
 
