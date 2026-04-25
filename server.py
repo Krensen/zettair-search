@@ -4,7 +4,8 @@ FastAPI wrapper around the zet CLI with a persistent worker pool.
 
 PRD-007: keeps N zet processes alive across queries — index loaded once,
 queries piped via stdin, JSON Lines responses read from stdout.
-PRD-008: optional query-biased summariser (ZET_SUMMARISE=1) using summarise.py
+PRD-011: query-biased summaries come directly from Zettair's C summariser
+         via the summary field in JSON output (--summary=plain).
 """
 import asyncio
 import bisect
@@ -13,7 +14,6 @@ import os
 import re
 import time
 import datetime
-import string
 import urllib.request
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query, Request
@@ -36,13 +36,7 @@ ZET_CLICK_ALPHA  = os.environ.get("ZET_CLICK_ALPHA", "0.5")
 ZET_WORKERS      = int(os.environ.get("ZET_WORKERS", "2"))
 ZET_QUERY_TIMEOUT = float(os.environ.get("ZET_QUERY_TIMEOUT", "5.0"))
 
-# PRD-008: query-biased summariser
-ZET_SUMMARISE  = os.environ.get("ZET_SUMMARISE", "0") == "1"
-SUMMARISE_PY   = os.path.join(os.path.dirname(__file__), "summarise.py")
-_wiki_dir      = os.path.join(os.path.dirname(__file__), "../zettair/wikipedia")
-DOCSTORE_PATH  = os.environ.get("ZET_DOCSTORE",  os.path.join(_wiki_dir, "enwiki.docstore"))
-DOCMAP_PATH    = os.environ.get("ZET_DOCMAP",    os.path.join(_wiki_dir, "enwiki.docmap"))
-SUMM_TIMEOUT   = float(os.environ.get("ZET_SUMM_TIMEOUT", "2.0"))
+_wiki_dir = os.path.join(os.path.dirname(__file__), "../zettair/wikipedia")
 
 # Query + click log
 _log_dir = os.path.join(os.path.dirname(__file__), "logs")
@@ -112,92 +106,6 @@ class FlatStore:
 
 _snippets_store = FlatStore(SNIPPETS_STORE_PATH, SNIPPETS_MAP_PATH, "snippets")
 _images_store   = FlatStore(IMAGES_STORE_PATH,   IMAGES_MAP_PATH,   "images")
-_docstore       = FlatStore(DOCSTORE_PATH, DOCMAP_PATH, "docstore")
-
-
-# ---------------------------------------------------------------------------
-# Persistent summariser pool (PRD-008)
-# ---------------------------------------------------------------------------
-
-class SummarisePool:
-    """
-    Persistent subprocess running summarise.py.
-    Accepts JSON lines on stdin, returns JSON lines on stdout.
-    Falls back to pre-baked snippets on any error.
-    """
-
-    def __init__(self):
-        self._proc: asyncio.subprocess.Process | None = None
-        self._lock = asyncio.Lock()
-        self._req_counter = 0
-
-    async def start(self):
-        if not ZET_SUMMARISE:
-            return
-        if not os.path.exists(DOCSTORE_PATH):
-            print("WARNING: ZET_SUMMARISE=1 but docstore not found — summariser disabled")
-            return
-        self._proc = await asyncio.create_subprocess_exec(
-            "python3", SUMMARISE_PY,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        print(f"[summ_pool] summariser started (pid {self._proc.pid})", flush=True)
-
-    async def summarise(self, query: str, docno_text: dict[str, str]) -> dict[str, str]:
-        """
-        Generate query-biased snippets. Returns {docno: snippet}.
-        Falls back to empty dict on error (caller uses pre-baked snippets).
-        """
-        if not ZET_SUMMARISE or self._proc is None or not docno_text:
-            return {}
-
-        # Parse query terms (same light normalisation as summarise.py)
-        terms = [t.lower().strip(string.punctuation)
-                 for t in query.split()
-                 if t.lower().strip(string.punctuation)]
-
-        self._req_counter += 1
-        req_id = str(self._req_counter)
-        payload = json.dumps({
-            "id": req_id,
-            "terms": terms,
-            "docs": docno_text,
-        }, ensure_ascii=False)
-
-        async with self._lock:
-            try:
-                self._proc.stdin.write((payload + "\n").encode("utf-8"))
-                await self._proc.stdin.drain()
-                async with asyncio.timeout(SUMM_TIMEOUT):
-                    raw = await self._proc.stdout.readline()
-                resp = json.loads(raw.decode("utf-8", errors="replace"))
-                return resp.get("summaries", {})
-            except Exception as e:
-                print(f"[summ_pool] error: {e} — falling back to pre-baked snippets", flush=True)
-                # Respawn
-                try:
-                    self._proc.kill()
-                except Exception:
-                    pass
-                self._proc = await asyncio.create_subprocess_exec(
-                    "python3", SUMMARISE_PY,
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                return {}
-
-    async def shutdown(self):
-        if self._proc:
-            try:
-                self._proc.stdin.close()
-                self._proc.kill()
-            except Exception:
-                pass
-
-_summ_pool = SummarisePool()
 
 
 # ---------------------------------------------------------------------------
@@ -367,14 +275,11 @@ async def lifespan(app: FastAPI):
     # Startup
     _snippets_store.load()
     _images_store.load()
-    _docstore.load()
     await _load_autosuggest()
     await _pool.start(ZET_WORKERS)
-    await _summ_pool.start()
     yield
     # Shutdown
     await _pool.shutdown()
-    await _summ_pool.shutdown()
 
 
 app = FastAPI(title="Zettair Search Service", lifespan=lifespan)
@@ -391,16 +296,12 @@ async def _load_autosuggest():
         print(f"WARNING: autosuggest file not found: {AUTOSUGGEST_PATH}")
 
 
-def enrich_results(results: list, qb_snippets: dict | None = None) -> list:
-    """Attach snippets and images. Uses query-biased snippets when available."""
+def enrich_results(results: list) -> list:
+    """Attach images; use C summariser snippet from zet, fall back to pre-baked."""
     enriched = []
     for r in results:
         docno = r.get("docno", "")
-        # Prefer query-biased snippet; fall back to pre-baked
-        if qb_snippets and docno in qb_snippets and qb_snippets[docno]:
-            snippet = qb_snippets[docno]
-        else:
-            snippet = _snippets_store.get(docno) or ""
+        snippet = r.get("summary") or _snippets_store.get(docno) or ""
         enriched.append({
             "rank": r["rank"],
             "score": r["score"],
@@ -455,15 +356,7 @@ async def search(
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-    # PRD-008: generate query-biased snippets if enabled
-    qb_snippets = {}
-    if ZET_SUMMARISE and parsed["results"]:
-        docnos = [r.get("docno", "") for r in parsed["results"] if r.get("docno")]
-        docno_text = _docstore.get_many(docnos)
-        if docno_text:
-            qb_snippets = await _summ_pool.summarise(q.strip(), docno_text)
-
-    results = enrich_results(parsed["results"], qb_snippets)
+    results = enrich_results(parsed["results"])
 
     asyncio.create_task(_append_log(QUERY_LOG, {
         "ts": _ts(),
