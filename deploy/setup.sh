@@ -47,7 +47,7 @@ apt-get install -y -qq \
     git gcc make autoconf automake libtool pkg-config \
     libz-dev curl wget bzip2
 
-pip3 install --quiet fastapi uvicorn
+pip3 install --quiet --break-system-packages fastapi uvicorn
 
 ### ── 2. Clone repos ─────────────────────────────────────────────────────────
 
@@ -137,6 +137,9 @@ print(f'{len(titles):,} titles written')
 log "Building docno map..."
 python3 build_docno_map.py
 
+log "Extracting titles list for autosuggest..."
+cut -f2 docno_map.tsv > simplewiki_titles.txt
+
 log "Building click prior..."
 python3 build_click_prior.py
 
@@ -166,7 +169,7 @@ if ! command -v cloudflared &>/dev/null; then
     curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
         | gpg --dearmor -o /usr/share/keyrings/cloudflare-main.gpg
     echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] \
-https://pkg.cloudflare.com/cloudflare focal main" \
+https://pkg.cloudflare.com/cloudflare $(lsb_release -cs) main" \
         > /etc/apt/sources.list.d/cloudflare.list
     apt-get update -qq && apt-get install -y -qq cloudflared
 fi

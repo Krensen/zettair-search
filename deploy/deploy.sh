@@ -15,7 +15,7 @@ cd "$INSTALL_DIR/zettair-search"
 git pull origin main
 
 log "Installing Python dependencies..."
-pip3 install --quiet -r requirements.txt
+pip3 install --quiet --break-system-packages -r requirements.txt
 
 log "Restarting service..."
 systemctl restart zettair-search
