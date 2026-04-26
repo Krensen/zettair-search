@@ -252,6 +252,11 @@ chown -R "$DEPLOY_USER:$DEPLOY_USER" "$SEARCH_DIR" "$ZETTAIR_DIR"
 chmod -R o+rX "$SEARCH_DIR"
 chmod -R o+rX "$ZETTAIR_DIR"
 
+# logs/ must be writable by the service user (queries.jsonl, clicks.jsonl,
+# zet_crashes.jsonl). Created here so the chown above doesn't lock it.
+mkdir -p "$SEARCH_DIR/logs"
+chown -R "$SERVICE_USER:$SERVICE_USER" "$SEARCH_DIR/logs"
+
 # zettair owns the volume — all runtime data lives here.
 # deploy does not need access after setup is complete.
 chown -R "$SERVICE_USER:$SERVICE_USER" "$VOLUME"
