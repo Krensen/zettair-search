@@ -14,7 +14,7 @@ A production search engine built on [Zettair](https://github.com/rmit-ir/zettair
 - **Query-biased summaries** — Zettair's C summariser (Turpin, Hawking & Williams, SIGIR 2003) generates snippets that highlight the query terms in context, not just the first sentence.
 - **Autosuggest** — 690k queries ranked by clickstream popularity, served via binary search in ~1ms.
 - **Persistent worker pool** — 2 long-lived `zet` processes with the index memory-mapped. Queries arrive via stdin, results come back as JSON Lines. ~50× lower latency than spawning a process per query.
-- **Disk-based sidecar stores** — snippets and images are stored as flat binary files with a JSON offset map. `os.pread()` seeks to the exact byte range per result — nothing is loaded into RAM except the map (~50MB for 1M articles).
+- **Disk-based sidecar stores** — snippets and images are stored as flat binary files with a JSON offset map. `os.pread()` seeks to the exact byte range per result — nothing is loaded into RAM except the map (~50 MB for 1M articles).
 
 ---
 
@@ -27,7 +27,7 @@ A production search engine built on [Zettair](https://github.com/rmit-ir/zettair
 
 The C patches in `zettair` add: ARM build support, click-prior scoring (`okapi.c`), `summary` field in JSON output (`commandline.c`).
 
-The pipeline scripts in `zettair/wikipedia/` produce all the data files the server needs at startup.
+The pipeline scripts in `zettair/wikipedia/` produce the data files the server needs at startup.
 
 ---
 
@@ -37,14 +37,17 @@ The pipeline scripts in `zettair/wikipedia/` produce all the data files the serv
 server.py          — FastAPI app: worker pool, FlatStore, search/suggest/click endpoints
 index.html         — Single-file frontend (HTML + CSS + JS, no build step)
 loadtest.py        — Load testing script with latency percentiles and histogram
+digest.py          — Daily query digest (reads logs/queries.jsonl, sends Telegram summary)
+requirements.txt   — Python deps: fastapi, uvicorn[standard]
 deploy/
-  setup.sh         — One-time VPS provisioning (install, build, download, index)
-  deploy.sh        — Called by CI/CD on every push: git pull + restart
-  zettair-search.service  — systemd unit for the search service
-  cloudflared.service     — legacy systemd unit for Cloudflare tunnel (kept for reference, not used)
-.github/workflows/deploy.yml  — GitHub Actions: SSH → deploy.sh on push to main
+  setup.sh                  — One-time VPS provisioning (install, build, download, index)
+  deploy.sh                 — Called by CI/CD on every push: git pull + restart
+  zettair-search.service    — systemd unit for the search service
+  cloudflared.service       — legacy systemd unit, kept for reference, not used
+.github/workflows/deploy.yml — GitHub Actions: SSH → deploy.sh on push to main
 prd/               — Product requirements documents for each major feature
 logs/              — queries.jsonl, clicks.jsonl, zet_crashes.jsonl (gitignored)
+mockup-*.html      — design mockups (historical reference)
 ```
 
 ---
@@ -88,30 +91,35 @@ All large files live on a separate Hetzner volume, not the boot disk.
 | `enwiki_top1m_snippets.map` | ~50 MB | JSON: `{docno: [offset, length]}` |
 | `enwiki_top1m_images.store` | ~60 MB | Wikimedia image URLs, concatenated |
 | `enwiki_top1m_images.map` | ~10 MB | JSON: `{docno: [offset, length]}` |
+| `enwiki_top1m.docstore` | ~3 GB | Full article text, concatenated UTF-8 (used by C summariser) |
+| `enwiki_top1m.docmap` | ~50 MB | Docstore offset map |
 | `click_prior.bin` | ~4 MB | float32 array indexed by Zettair docno |
 | `autosuggest.json` | ~15 MB | Sorted `[[query, count], ...]` array |
-| `docno_map.tsv` | ~20 MB | `internal_id\ttitle` — maps Zettair integers to article titles |
+
+(`docno_map.tsv`, ~20 MB, lives in `/opt/zettair/wikipedia/` since it's only needed at build time.)
 
 ---
 
 ## Environment variables
 
-Configured in `deploy/zettair-search.service`. Defaults shown:
+Configured in `deploy/zettair-search.service`. Values shown match what's deployed:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ZET_BINARY` | `../zettair/devel/zet` | Path to compiled zet binary |
-| `ZET_INDEX` | `../zettair/wikiindex/index` | Path to Zettair index |
-| `ZET_PORT` | `8765` | HTTP port |
+| Variable | Value | Description |
+|----------|-------|-------------|
+| `ZET_BINARY` | `/opt/zettair/devel/zet` | Path to compiled zet binary |
+| `ZET_INDEX` | `/mnt/wikipedia-source/wikiindex/index` | Path to Zettair index |
+| `ZET_PORT` | `8765` (default) | HTTP port |
 | `ZET_WORKERS` | `2` | Persistent zet worker processes |
 | `ZET_QUERY_TIMEOUT` | `5.0` | Per-query timeout in seconds |
-| `ZET_CLICK_PRIOR` | `../zettair/wikipedia/click_prior.bin` | Click prior float32 array |
+| `ZET_CLICK_PRIOR` | `/mnt/wikipedia-source/click_prior.bin` | Click prior float32 array |
 | `ZET_CLICK_ALPHA` | `0.5` | Click boost strength (0 = off, 1.5 = strong) |
-| `ZET_SNIPPETS_STORE` | `…enwiki_top1m_snippets.store` | Snippets flat binary |
-| `ZET_SNIPPETS_MAP` | `…enwiki_top1m_snippets.map` | Snippets offset map |
-| `ZET_IMAGES_STORE` | `…enwiki_top1m_images.store` | Images flat binary |
-| `ZET_IMAGES_MAP` | `…enwiki_top1m_images.map` | Images offset map |
-| `ZET_AUTOSUGGEST` | `…autosuggest.json` | Autosuggest sorted array |
+| `ZET_SNIPPETS_STORE` | `/mnt/wikipedia-source/enwiki_top1m_snippets.store` | Snippets flat binary |
+| `ZET_SNIPPETS_MAP` | `/mnt/wikipedia-source/enwiki_top1m_snippets.map` | Snippets offset map |
+| `ZET_IMAGES_STORE` | `/mnt/wikipedia-source/enwiki_top1m_images.store` | Images flat binary |
+| `ZET_IMAGES_MAP` | `/mnt/wikipedia-source/enwiki_top1m_images.map` | Images offset map |
+| `ZET_DOCSTORE` | `/mnt/wikipedia-source/enwiki_top1m.docstore` | Full-text docstore (for C summariser) |
+| `ZET_DOCMAP` | `/mnt/wikipedia-source/enwiki_top1m.docmap` | Docstore offset map |
+| `ZET_AUTOSUGGEST` | `/mnt/wikipedia-source/autosuggest.json` | Autosuggest sorted array |
 
 ---
 
@@ -121,21 +129,23 @@ Configured in `deploy/zettair-search.service`. Defaults shown:
 sudo bash deploy/setup.sh
 ```
 
-`setup.sh` does everything in order, guarded by existence checks so it's safe to re-run after any failure:
+`setup.sh` runs all steps in order, guarded by existence checks so it's safe to re-run after any failure. The 12 steps (matching the script):
 
 1. Install system packages and Python deps
-2. Create `deploy` and `zettair` users
+2. Create `deploy` and `zettair` users (if absent)
 3. Clone both repos into `/opt/`
-4. Build the Zettair binary
-5. Download the enwiki bz2 dump (~23 GB) to the volume
-6. Download 15 months of clickstream data (~7.4 GB)
-7. Run `select_top_articles.py` → `top_titles.txt` (top 1M by decayed click score)
-8. Run `wiki2trec.py` with bz2 streaming and title allowlist (~4–8 hours)
-9. Auto-delete bz2 if volume free space < 25 GB
-10. Build docno map, click prior, autosuggest, docstore
-11. Build the Zettair index (~30–60 min)
-12. Set permissions, install and enable systemd service
-13. Set permissions and install systemd service
+4. Build the Zettair binary (with ARM detection)
+5. Verify the volume is mounted at `/mnt/wikipedia-source/`
+6. Download the enwiki bz2 dump (~23 GB) to the volume
+7. Download 15 months of clickstream data (~7.4 GB) into `/opt/zettair/wikipedia/`
+8. Run `select_top_articles.py` → `top_titles.txt` (top 1M by decayed click score)
+9. Run `wiki2trec.py` with bz2 streaming and title allowlist (~4–8 hours)
+10. Auto-delete bz2 if volume free space < 25 GB threshold
+11. Build docno map, click prior, autosuggest, docstore
+12. Build the Zettair index (~30–60 min)
+13. Set ownership/permissions and install the systemd service
+
+(Caddy reverse proxy is installed separately — not managed by this script.)
 
 **Prerequisites:**
 - Ubuntu 24.04 ARM64 or x86_64
@@ -143,7 +153,7 @@ sudo bash deploy/setup.sh
 - 80 GB attached volume mounted at `/mnt/wikipedia-source/`
 - ~8–12 hours total (mostly download + indexing)
 
-Config at the top of `setup.sh`: `CORPUS_SIZE`, `CLICKSTREAM_MONTHS`, `DEPLOY_USER`, `SERVICE_USER`, `VOLUME`, etc.
+Config at the top of `setup.sh`: `CORPUS_SIZE`, `CLICKSTREAM_MONTHS`, `DEPLOY_USER`, `SERVICE_USER`, `VOLUME`, `ENWIKI_DUMP_URL`, `BZ2_DELETE_THRESHOLD_GB`.
 
 ---
 
@@ -172,9 +182,9 @@ git pull → pip install -r requirements.txt → systemctl restart → health ch
 | `deploy` | Git pulls, deploys, admin | `/opt/zettair-search`, `/opt/zettair` |
 | `zettair` | Runs the service | `/mnt/wikipedia-source/` |
 
-Both repos are world-readable so the `zettair` service user can read `server.py` and the `zet` binary without owning them. The volume is `750` (zettair only) since the service is the only runtime reader.
+Both repos are world-readable (chmod `o+rX`) so the `zettair` service user can read `server.py` and the `zet` binary without owning them. The volume is `750` and owned by `zettair` since the service is the only runtime reader.
 
-`git pull` and `sudo systemctl restart zettair-search` — no sudo needed for the pull.
+`git pull` (no sudo) and `sudo systemctl restart zettair-search` is the standard deploy flow.
 
 ---
 
@@ -190,7 +200,7 @@ python3 loadtest.py --url https://zettair.io --duration 120 --workers 4
 
 Fetches ~38k real queries from `/suggest` (weighted by click count), fires them concurrently, reports mean/p50/p75/p90/p95/p99/max and a latency histogram.
 
-Baseline on CCX13 (2 vCPU, 8 GB RAM): ~30 req/s, p50 ~250ms, p95 ~500ms, p99 ~700ms.
+Baseline on CCX13 (2 vCPU, 8 GB RAM): ~30 req/s, p50 ~250 ms, p95 ~500 ms, p99 ~700 ms.
 
 ---
 
@@ -198,7 +208,7 @@ Baseline on CCX13 (2 vCPU, 8 GB RAM): ~30 req/s, p50 ~250ms, p95 ~500ms, p99 ~70
 
 **Clickstream** (monthly): download new `clickstream-enwiki-YYYY-MM.tsv.gz`, rebuild `click_prior.bin` and `autosuggest.json`. Triggered manually for now.
 
-**Full corpus rebuild** (quarterly): re-run `setup.sh` from step 7 onwards. Increase `CORPUS_SIZE` at the top of `setup.sh` if you want more articles — bumping to 1.5M is a matter of changing one number and re-running.
+**Full corpus rebuild** (quarterly): re-run `setup.sh` from step 8 onwards. Increase `CORPUS_SIZE` at the top of `setup.sh` if you want more articles — bumping to 1.5M is a matter of changing one number and re-running.
 
 ---
 
@@ -213,11 +223,11 @@ sudo journalctl -u zettair-search -n 50
 Index files are probably owned by root. Fix: `sudo chown -R zettair:zettair /mnt/wikipedia-source/`
 
 **`git pull` fails with permission denied:**
-`.git` was written by root. Fix: `sudo chown -R deploy:deploy /opt/zettair-search`
+`.git` was written by root (e.g. someone ran `sudo git pull`). Fix: `sudo chown -R deploy:deploy /opt/zettair-search`
 
 **Autosuggest returns nothing:**
 ```bash
-sudo -u zettair curl 'http://localhost:8765/suggest?q=ei&n=5'
+curl 'http://localhost:8765/suggest?q=ei&n=5'
 # if empty, rebuild: cd /opt/zettair/wikipedia && python3 build_autosuggest.py
 ```
 
@@ -237,6 +247,7 @@ Design decisions are recorded in `prd/`. Reading order if you're new to the code
 |-----|---------------|
 | PRD-006 | Click-prior ranking — how clickstream data is baked into BM25 |
 | PRD-007 | Persistent worker pool — why and how the zet process pool works |
+| PRD-008 | Query-biased summaries — original Python summariser design (superseded) |
 | PRD-011 | C summariser — replacing the Python summariser with Zettair's built-in |
 | PRD-012 | Top-1M corpus — why 1M articles, disk budget, build pipeline |
 | PRD-013 | Session logging — session IDs, IP logging, result lists in query log |
