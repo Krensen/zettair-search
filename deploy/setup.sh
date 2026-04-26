@@ -20,7 +20,8 @@
 #  10.  Build docno map, click prior, autosuggest, docstore
 #  11.  Build Zettair index
 #  12.  Set permissions and install systemd service
-#  13.  Install cloudflared
+#
+# Note: Caddy (reverse proxy + TLS) is installed separately and not managed here.
 #
 # Every step is guarded by an existence check — re-run safely after any failure.
 
@@ -250,23 +251,6 @@ log "Installing systemd service..."
 cp "$SEARCH_DIR/deploy/zettair-search.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable zettair-search
-
-### ── 14. Install cloudflared ────────────────────────────────────────────────
-
-log "Installing cloudflared..."
-if ! command -v cloudflared &>/dev/null; then
-    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
-        | gpg --dearmor -o /usr/share/keyrings/cloudflare-main.gpg
-    echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] \
-https://pkg.cloudflare.com/cloudflare $(lsb_release -cs) main" \
-        > /etc/apt/sources.list.d/cloudflare.list
-    apt-get update -qq && apt-get install -y -qq cloudflared
-fi
-if [ -f "$SEARCH_DIR/deploy/cloudflared.service" ]; then
-    cp "$SEARCH_DIR/deploy/cloudflared.service" /etc/systemd/system/
-    systemctl daemon-reload
-    systemctl enable cloudflared
-fi
 
 ### ── Done ───────────────────────────────────────────────────────────────────
 

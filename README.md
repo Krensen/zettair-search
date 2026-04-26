@@ -53,15 +53,14 @@ logs/              — queries.jsonl, clicks.jsonl, zet_crashes.jsonl (gitignore
 
 ```
 Browser (HTTPS)
-  └─▶ Cloudflare edge
-        └─▶ cloudflared tunnel (VPS)
-              └─▶ server.py :8765 (FastAPI / uvicorn)
-                    ├─▶ ZetPool — 2 persistent zet processes
-                    │     query via stdin → JSON Lines on stdout
-                    │     index is memory-mapped by the OS
-                    ├─▶ FlatStore (_snippets_store) — os.pread() into snippets binary
-                    ├─▶ FlatStore (_images_store)   — os.pread() into images binary
-                    └─▶ _autosuggest list           — sorted (query, count) pairs
+  └─▶ Caddy (VPS, handles TLS + reverse proxy)
+        └─▶ server.py :8765 (FastAPI / uvicorn)
+              ├─▶ ZetPool — 2 persistent zet processes
+              │     query via stdin → JSON Lines on stdout
+              │     index is memory-mapped by the OS
+              ├─▶ FlatStore (_snippets_store) — os.pread() into snippets binary
+              ├─▶ FlatStore (_images_store)   — os.pread() into images binary
+              └─▶ _autosuggest list           — sorted (query, count) pairs
 ```
 
 **Query flow:**
@@ -161,6 +160,8 @@ git pull → pip install -r requirements.txt → systemctl restart → health ch
 2. Add `deploy_key.pub` to `~/.ssh/authorized_keys` on the VPS (as `deploy` user)
 3. Add `deploy_key` as GitHub secret `VPS_SSH_KEY`
 4. Add VPS IP as GitHub secret `VPS_IP`
+
+**Reverse proxy:** Caddy is installed separately on the VPS and handles TLS termination and reverse proxying to `:8765`. It is not managed by this repo. Caddy sets `X-Forwarded-For` with the real client IP, which `server.py` reads for logging.
 
 ---
 
