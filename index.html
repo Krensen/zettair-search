@@ -557,8 +557,8 @@
                  onclick="logClick(${JSON.stringify(q)}, ${JSON.stringify(top.docno)}, 1, ${top.score})"
               >${esc(title)}</a>
               <div class="kp-source">
-                <img src="https://www.google.com/s2/favicons?domain=simple.wikipedia.org&sz=32" alt="">
-                <span>Wikipedia · simple.wikipedia.org</span>
+                <img src="https://www.google.com/s2/favicons?domain=en.wikipedia.org&sz=32" alt="">
+                <span>Wikipedia · en.wikipedia.org</span>
               </div>
               <p>${highlightQuery(top.snippet || '', q)}</p>
             </div>
@@ -571,7 +571,7 @@
       resultsList.innerHTML = data.results.map(r => {
         const title = formatTitle(r.docno);
         const url = wikiLink(r.docno);
-        const crumb = `simple.wikipedia.org › wiki › ${r.docno.replace(/_/g, ' ')}`;
+        const crumb = `en.wikipedia.org › wiki › ${r.docno.replace(/_/g, ' ')}`;
         const thumb = r.image_url
           ? `<div class="result-thumb-wrap">
                <img class="result-thumb" src="${esc(proxyImg(r.image_url))}" alt="${esc(title)}"
@@ -583,7 +583,7 @@
             <div class="result-text">
               <div class="result-source">
                 <img class="result-favicon"
-                  src="https://www.google.com/s2/favicons?domain=simple.wikipedia.org&sz=64" alt="">
+                  src="https://www.google.com/s2/favicons?domain=en.wikipedia.org&sz=64" alt="">
                 <div class="result-site">
                   <span class="result-site-name">Wikipedia</span>
                   <span class="result-breadcrumb">${esc(crumb)}</span>
@@ -727,7 +727,7 @@
   }
 
   const proxyImg = url => url ? `/img?url=${encodeURIComponent(url)}` : null;
-  const wikiLink = docno => `https://simple.wikipedia.org/wiki/${encodeURIComponent(docno)}`;
+  const wikiLink = docno => `https://en.wikipedia.org/wiki/${encodeURIComponent(docno)}`;
   const formatTitle = docno => (docno || '').replace(/_/g, ' ').replace(/\s*\(.*?\)\s*$/, '').trim();
   const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
