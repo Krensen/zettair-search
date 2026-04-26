@@ -43,8 +43,10 @@ FALLBACK_QUERIES = [
 
 
 def fetch_autosuggest_queries(base_url: str, n: int) -> list[tuple[str, int]]:
-    """Pull (query, count) pairs from the server's autosuggest list."""
-    prefixes = list("abcdefghijklmnopqrstuvwxyz")
+    """Pull (query, count) pairs by hitting two-character prefixes (aa..zz)."""
+    alpha = "abcdefghijklmnopqrstuvwxyz"
+    prefixes = [a + b for a in alpha for b in alpha]  # 676 prefixes
+    seen = set()
     pairs = []
     for prefix in prefixes:
         try:
@@ -52,7 +54,10 @@ def fetch_autosuggest_queries(base_url: str, n: int) -> list[tuple[str, int]]:
             with urllib.request.urlopen(url, timeout=5) as r:
                 data = json.loads(r.read())
             for s in data.get("suggestions", []):
-                pairs.append((s["query"], s["count"]))
+                q = s["query"]
+                if q not in seen:
+                    seen.add(q)
+                    pairs.append((q, s["count"]))
         except Exception:
             pass
         if len(pairs) >= n:
@@ -247,7 +252,7 @@ def main():
         print(f"Loaded {len(query_pool):,} queries from {args.queries} (uniform weights)")
     else:
         print(f"Fetching queries from {base_url}/suggest ...", end=" ", flush=True)
-        pairs = fetch_autosuggest_queries(base_url, 2600)  # 26 prefixes × 100
+        pairs = fetch_autosuggest_queries(base_url, 50_000)  # 676 two-char prefixes × 100
         if not pairs:
             pairs = FALLBACK_QUERIES
             print(f"(autosuggest unavailable, using {len(pairs)} built-in queries)")
