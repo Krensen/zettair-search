@@ -47,7 +47,6 @@ deploy/
 .github/workflows/deploy.yml — GitHub Actions: SSH → deploy.sh on push to main
 prd/               — Product requirements documents for each major feature
 logs/              — queries.jsonl, clicks.jsonl, zet_crashes.jsonl (gitignored)
-mockup-*.html      — design mockups (historical reference)
 ```
 
 ---
