@@ -63,9 +63,12 @@ AUTOSUGGEST_PATH    = os.environ.get("ZET_AUTOSUGGEST",    os.path.join(_wiki_di
 
 _autosuggest: list = []   # sorted list of (query, count) tuples
 
+# Cache index.html at startup
+_index_html: str = ""
+
 
 # ---------------------------------------------------------------------------
-# Flat store — random-access by docno via an offset map (snippets, images, docstore)
+# Flat store — random-access by docno via an offset map (snippets, images)
 # ---------------------------------------------------------------------------
 
 class FlatStore:
@@ -90,6 +93,14 @@ class FlatStore:
         size_mb = os.path.getsize(self._store_path) / 1024 / 1024
         print(f"  {self._label}: {len(self._map):,} entries, {size_mb:.0f}MB store", flush=True)
 
+    def close(self):
+        if self._fd >= 0:
+            try:
+                os.close(self._fd)
+            except OSError:
+                pass
+            self._fd = -1
+
     def get(self, docno: str) -> str | None:
         if not self._loaded:
             return None
@@ -97,8 +108,11 @@ class FlatStore:
         if entry is None:
             return None
         offset, length = entry
-        # os.pread is atomic — no seek needed, safe under concurrent calls
-        return os.pread(self._fd, length, offset).decode("utf-8", errors="replace")
+        try:
+            # os.pread is atomic — no seek, safe under concurrent calls
+            return os.pread(self._fd, length, offset).decode("utf-8", errors="replace")
+        except OSError:
+            return None
 
     def get_many(self, docnos: list[str]) -> dict[str, str]:
         return {d: t for d in docnos if (t := self.get(d)) is not None}
@@ -139,7 +153,6 @@ class ZetWorker:
                     raise RuntimeError(f"Worker {self.worker_id} stdout closed unexpectedly")
                 obj = json.loads(raw.decode("utf-8", errors="replace"))
                 if obj.get("done"):
-                    # Attach total/took_ms to first result as metadata carrier
                     results.append({"_meta": True,
                                     "total": obj.get("total", 0),
                                     "took_ms": obj.get("took_ms", 0)})
@@ -161,7 +174,6 @@ class ZetPool:
 
     async def start(self, size: int):
         self._sem = asyncio.Semaphore(size)
-        # Build env and args once
         self._env = os.environ.copy()
         if os.path.exists(ZET_CLICK_PRIOR):
             self._env["ZET_CLICK_PRIOR"] = ZET_CLICK_PRIOR
@@ -201,7 +213,6 @@ class ZetPool:
                         await self._respawn_worker(w)
                     w.busy = True
                     return w
-        # Should not reach here if semaphore is used correctly
         raise RuntimeError("No available worker found")
 
     async def _respawn_worker(self, w: ZetWorker):
@@ -235,19 +246,23 @@ class ZetPool:
             elapsed = (time.monotonic() - t0) * 1000
 
             meta = next((r for r in raw if r.get("_meta")), {})
-            results = [r for r in raw if not r.get("_meta")][:n]  # slice to requested n
+            results = [r for r in raw if not r.get("_meta")][:n]
 
             return {
                 "total": meta.get("total", len(results)),
                 "took_ms": round(meta.get("took_ms", elapsed), 2),
                 "results": results,
             }
+        except asyncio.TimeoutError:
+            # Worker stdin/stdout are now out of sync — must respawn before reuse
+            async with self._lock:
+                await self._respawn_worker(worker)
+            raise
         except Exception as e:
-            # Worker may have crashed — respawn and surface error
             if not worker.is_alive():
                 async with self._lock:
                     await self._respawn_worker(worker)
-            raise e
+            raise
         finally:
             worker.busy = False
             self._sem.release()
@@ -256,6 +271,16 @@ class ZetPool:
         for w in self._workers:
             try:
                 w.proc.stdin.close()
+                w.proc.terminate()
+            except Exception:
+                pass
+        # Wait up to 3s for graceful exit, then force-kill
+        await asyncio.gather(
+            *[asyncio.wait_for(w.proc.wait(), timeout=3.0) for w in self._workers],
+            return_exceptions=True,
+        )
+        for w in self._workers:
+            try:
                 w.proc.kill()
             except Exception:
                 pass
@@ -272,13 +297,19 @@ _pool = ZetPool()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _index_html
     # Startup
     _snippets_store.load()
     _images_store.load()
     await _load_autosuggest()
     await _pool.start(ZET_WORKERS)
+    html_path = os.path.join(os.path.dirname(__file__), "index.html")
+    with open(html_path, encoding="utf-8") as f:
+        _index_html = f.read()
     yield
     # Shutdown
+    _snippets_store.close()
+    _images_store.close()
     await _pool.shutdown()
 
 
@@ -399,13 +430,16 @@ async def image_proxy(url: str = Query(...)):
     if not url.startswith("https://upload.wikimedia.org/"):
         return Response(status_code=403)
     try:
+        # Run blocking urllib call in a thread so the event loop isn't blocked
         req = urllib.request.Request(url, headers={
-            "User-Agent": "ZettairSearch/1.0 (https://search.hughwilliams.com)",
-            "Referer": "https://search.hughwilliams.com/",
+            "User-Agent": "ZettairSearch/1.0 (https://zettair.io)",
+            "Referer": "https://zettair.io/",
         })
-        with urllib.request.urlopen(req, timeout=8) as r:
-            data = r.read()
-            content_type = r.headers.get("Content-Type", "image/jpeg")
+        loop = asyncio.get_event_loop()
+        def _fetch():
+            with urllib.request.urlopen(req, timeout=8) as r:
+                return r.read(), r.headers.get("Content-Type", "image/jpeg")
+        data, content_type = await loop.run_in_executor(None, _fetch)
         return Response(content=data, media_type=content_type,
                         headers={"Cache-Control": "public, max-age=86400"})
     except Exception:
@@ -414,9 +448,7 @@ async def image_proxy(url: str = Query(...)):
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    html_path = os.path.join(os.path.dirname(__file__), "index.html")
-    with open(html_path, encoding="utf-8") as f:
-        return f.read()
+    return _index_html
 
 
 if __name__ == "__main__":
