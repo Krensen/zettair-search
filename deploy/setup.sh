@@ -225,7 +225,9 @@ fi
 
 log "Creating service user '$SERVICE_USER'..."
 id "$SERVICE_USER" &>/dev/null || useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
-chown -R "$SERVICE_USER":"$SERVICE_USER" "$INSTALL_DIR/zettair" "$INSTALL_DIR/zettair-search"
+# zettair-search repo stays owned by deploy so git pull works without sudo
+chown -R deploy:deploy "$INSTALL_DIR/zettair-search"
+chown -R "$SERVICE_USER":"$SERVICE_USER" "$INSTALL_DIR/zettair"
 chown -R "$SERVICE_USER":"$SERVICE_USER" "$VOLUME"
 
 log "Installing systemd service..."
