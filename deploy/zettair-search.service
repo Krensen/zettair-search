@@ -20,6 +20,7 @@ Environment=ZET_IMAGES_MAP=/mnt/wikipedia-source/enwiki_top1m_images.map
 Environment=ZET_AUTOSUGGEST=/mnt/wikipedia-source/autosuggest.json
 Environment=ZET_DOCSTORE=/mnt/wikipedia-source/enwiki_top1m.docstore
 Environment=ZET_DOCMAP=/mnt/wikipedia-source/enwiki_top1m.docmap
+Environment=ZET_DBKEYS=/mnt/wikipedia-source/enwiki_top1m.dbkeys.tsv
 
 ExecStart=/usr/bin/python3 server.py
 Restart=always

@@ -220,6 +220,16 @@ else
     log "  enwiki_top1m.docstore already exists — skipping."
 fi
 
+log "Building dbkey map..."
+DBKEYS_FILE="$VOLUME/enwiki_top1m.dbkeys.tsv"
+if [ ! -f "$DBKEYS_FILE" ]; then
+    # If wiki2trec.py wrote the dbkeys file natively, it's already here. Otherwise
+    # generate it from top_titles.txt + docno_map.tsv (one-shot bootstrap).
+    python3 "$WIKI_DIR/build_dbkey_map.py" "$TITLES_FILE" "$WIKI_DIR/docno_map.tsv" "$DBKEYS_FILE"
+else
+    log "  enwiki_top1m.dbkeys.tsv already exists — skipping."
+fi
+
 ### ── 12. Build Zettair index ────────────────────────────────────────────────
 
 if [ ! -f "$INDEX_DIR/index.cfg" ]; then
