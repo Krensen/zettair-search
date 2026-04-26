@@ -76,7 +76,7 @@ class FlatStore:
         self._map_path = map_path
         self._label = label
         self._map: dict = {}
-        self._fp = None
+        self._fd: int = -1
         self._loaded = False
 
     def load(self):
@@ -85,7 +85,7 @@ class FlatStore:
             return
         with open(self._map_path, encoding="utf-8") as f:
             self._map = json.load(f)
-        self._fp = open(self._store_path, "rb")
+        self._fd = os.open(self._store_path, os.O_RDONLY)
         self._loaded = True
         size_mb = os.path.getsize(self._store_path) / 1024 / 1024
         print(f"  {self._label}: {len(self._map):,} entries, {size_mb:.0f}MB store", flush=True)
@@ -97,8 +97,8 @@ class FlatStore:
         if entry is None:
             return None
         offset, length = entry
-        self._fp.seek(offset)
-        return self._fp.read(length).decode("utf-8", errors="replace")
+        # os.pread is atomic — no seek needed, safe under concurrent calls
+        return os.pread(self._fd, length, offset).decode("utf-8", errors="replace")
 
     def get_many(self, docnos: list[str]) -> dict[str, str]:
         return {d: t for d in docnos if (t := self.get(d)) is not None}
