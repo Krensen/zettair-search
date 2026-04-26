@@ -320,7 +320,7 @@ def enrich_results(results: list) -> list:
 @app.get("/suggest")
 async def suggest(
     q: str = Query(..., description="Query prefix"),
-    n: int = Query(8, ge=1, le=20),
+    n: int = Query(8, ge=1, le=200),
 ):
     """Return autosuggest results for a query prefix."""
     prefix = q.strip().lower()
