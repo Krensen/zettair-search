@@ -41,7 +41,7 @@ deploy/
   setup.sh         — One-time VPS provisioning (install, build, download, index)
   deploy.sh        — Called by CI/CD on every push: git pull + restart
   zettair-search.service  — systemd unit for the search service
-  cloudflared.service     — systemd unit for the Cloudflare tunnel
+  cloudflared.service     — legacy systemd unit for Cloudflare tunnel (kept for reference, not used)
 .github/workflows/deploy.yml  — GitHub Actions: SSH → deploy.sh on push to main
 prd/               — Product requirements documents for each major feature
 logs/              — queries.jsonl, clicks.jsonl, zet_crashes.jsonl (gitignored)
@@ -135,7 +135,7 @@ sudo bash deploy/setup.sh
 10. Build docno map, click prior, autosuggest, docstore
 11. Build the Zettair index (~30–60 min)
 12. Set permissions, install and enable systemd service
-13. Install cloudflared
+13. Set permissions and install systemd service
 
 **Prerequisites:**
 - Ubuntu 24.04 ARM64 or x86_64
@@ -221,10 +221,10 @@ sudo -u zettair curl 'http://localhost:8765/suggest?q=ei&n=5'
 # if empty, rebuild: cd /opt/zettair/wikipedia && python3 build_autosuggest.py
 ```
 
-**Cloudflare tunnel drops:**
+**Caddy not proxying / TLS errors:**
 ```bash
-sudo systemctl restart cloudflared
-sudo journalctl -u cloudflared -n 30
+sudo systemctl restart caddy
+sudo journalctl -u caddy -n 30
 ```
 
 ---
