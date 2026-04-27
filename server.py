@@ -59,11 +59,11 @@ SNIPPETS_STORE_PATH = os.environ.get("ZET_SNIPPETS_STORE", os.path.join(_wiki_di
 SNIPPETS_MAP_PATH   = os.environ.get("ZET_SNIPPETS_MAP",   os.path.join(_wiki_dir, "enwiki_snippets.map"))
 IMAGES_STORE_PATH   = os.environ.get("ZET_IMAGES_STORE",   os.path.join(_wiki_dir, "enwiki_images.store"))
 IMAGES_MAP_PATH     = os.environ.get("ZET_IMAGES_MAP",     os.path.join(_wiki_dir, "enwiki_images.map"))
+URLS_STORE_PATH     = os.environ.get("ZET_URLS_STORE",     os.path.join(_wiki_dir, "enwiki_urls.store"))
+URLS_MAP_PATH       = os.environ.get("ZET_URLS_MAP",       os.path.join(_wiki_dir, "enwiki_urls.map"))
 AUTOSUGGEST_PATH    = os.environ.get("ZET_AUTOSUGGEST",    os.path.join(_wiki_dir, "autosuggest.json"))
-DBKEYS_PATH         = os.environ.get("ZET_DBKEYS",         os.path.join(_wiki_dir, "enwiki_top1m.dbkeys.tsv"))
 
 _autosuggest: list = []   # sorted list of (query, count) tuples
-_dbkey_map: dict = {}     # safe_id -> dbkey, only entries where they differ
 
 # Cache index.html at startup
 _index_html: str = ""
@@ -122,6 +122,7 @@ class FlatStore:
 
 _snippets_store = FlatStore(SNIPPETS_STORE_PATH, SNIPPETS_MAP_PATH, "snippets")
 _images_store   = FlatStore(IMAGES_STORE_PATH,   IMAGES_MAP_PATH,   "images")
+_urls_store     = FlatStore(URLS_STORE_PATH,     URLS_MAP_PATH,     "urls")
 
 
 # ---------------------------------------------------------------------------
@@ -303,8 +304,8 @@ async def lifespan(app: FastAPI):
     # Startup
     _snippets_store.load()
     _images_store.load()
+    _urls_store.load()
     await _load_autosuggest()
-    _load_dbkey_map()
     await _pool.start(ZET_WORKERS)
     html_path = os.path.join(os.path.dirname(__file__), "index.html")
     with open(html_path, encoding="utf-8") as f:
@@ -313,6 +314,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     _snippets_store.close()
     _images_store.close()
+    _urls_store.close()
     await _pool.shutdown()
 
 
@@ -330,37 +332,24 @@ async def _load_autosuggest():
         print(f"WARNING: autosuggest file not found: {AUTOSUGGEST_PATH}")
 
 
-def _load_dbkey_map():
-    global _dbkey_map
-    if not os.path.exists(DBKEYS_PATH):
-        print(f"WARNING: dbkey map not found: {DBKEYS_PATH} — links to articles with punctuation will 404", flush=True)
-        return
-    print(f"Loading dbkey map from {DBKEYS_PATH}...", flush=True)
-    with open(DBKEYS_PATH, encoding="utf-8") as f:
-        for line in f:
-            parts = line.rstrip("\n").split("\t", 1)
-            if len(parts) == 2:
-                _dbkey_map[parts[0]] = parts[1]
-    print(f"  Loaded {len(_dbkey_map):,} dbkey remaps", flush=True)
-
-
 def enrich_results(results: list) -> list:
-    """Attach images; use C summariser snippet from zet, fall back to pre-baked."""
+    """Attach url, snippet, and image. All sidecar stores are keyed by docno (safe_id)."""
     enriched = []
     for r in results:
-        # zet returns the safe_id (parens-stripped); translate to dbkey for the
-        # response so frontend links match Wikipedia's URL format. Sidecar stores
-        # are keyed by safe_id, so look those up before swapping.
-        docno_raw = r.get("docno", "")
-        docno = _dbkey_map.get(docno_raw, docno_raw)
-        snippet = r.get("summary") or _snippets_store.get(docno_raw) or ""
+        docno = r.get("docno", "")
+        snippet = r.get("summary") or _snippets_store.get(docno) or ""
+        # URL store only contains entries for docnos where the dbkey differs
+        # from the safe_id (~23% of articles). For the rest, construct it
+        # from the docno directly.
+        url = _urls_store.get(docno) or f"https://en.wikipedia.org/wiki/{docno}"
         enriched.append({
             "rank": r["rank"],
             "score": r["score"],
             "docid": r["docid"],
             "docno": docno,
+            "url": url,
             "snippet": snippet,
-            "image_url": _images_store.get(docno_raw),
+            "image_url": _images_store.get(docno),
         })
     return enriched
 

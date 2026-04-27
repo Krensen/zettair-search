@@ -1,6 +1,6 @@
 # PRD-014: Dbkey Passthrough for Wikipedia URLs
 
-**Status:** Draft  
+**Status:** Superseded by PRD-015  
 **Author:** metabot  
 **Date:** 2026-04-26
 

@@ -547,7 +547,7 @@
       const top = data.results[0];
       if (top.image_url) {
         const title = formatTitle(top.docno);
-        const wikiUrl = wikiLink(top.docno);
+        const wikiUrl = wikiLink(top);
         knowledgePanel.innerHTML = `
           <div class="knowledge-panel">
             <img src="${esc(proxyImg(top.image_url))}" alt="${esc(title)}"
@@ -570,7 +570,7 @@
       // Results
       resultsList.innerHTML = data.results.map(r => {
         const title = formatTitle(r.docno);
-        const url = wikiLink(r.docno);
+        const url = wikiLink(r);
         const crumb = `en.wikipedia.org › wiki › ${r.docno.replace(/_/g, ' ')}`;
         const thumb = r.image_url
           ? `<div class="result-thumb-wrap">
@@ -727,7 +727,7 @@
   }
 
   const proxyImg = url => url ? `/img?url=${encodeURIComponent(url)}` : null;
-  const wikiLink = docno => `https://en.wikipedia.org/wiki/${encodeURIComponent(docno)}`;
+  const wikiLink = r => r.url || `https://en.wikipedia.org/wiki/${encodeURIComponent(r.docno)}`;
   const formatTitle = docno => (docno || '').replace(/_/g, ' ').replace(/\s*\(.*?\)\s*$/, '').trim();
   const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 

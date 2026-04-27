@@ -17,10 +17,11 @@ Environment=ZET_SNIPPETS_STORE=/mnt/wikipedia-source/enwiki_top1m_snippets.store
 Environment=ZET_SNIPPETS_MAP=/mnt/wikipedia-source/enwiki_top1m_snippets.map
 Environment=ZET_IMAGES_STORE=/mnt/wikipedia-source/enwiki_top1m_images.store
 Environment=ZET_IMAGES_MAP=/mnt/wikipedia-source/enwiki_top1m_images.map
+Environment=ZET_URLS_STORE=/mnt/wikipedia-source/enwiki_top1m_urls.store
+Environment=ZET_URLS_MAP=/mnt/wikipedia-source/enwiki_top1m_urls.map
 Environment=ZET_AUTOSUGGEST=/mnt/wikipedia-source/autosuggest.json
 Environment=ZET_DOCSTORE=/mnt/wikipedia-source/enwiki_top1m.docstore
 Environment=ZET_DOCMAP=/mnt/wikipedia-source/enwiki_top1m.docmap
-Environment=ZET_DBKEYS=/mnt/wikipedia-source/enwiki_top1m.dbkeys.tsv
 
 ExecStart=/usr/bin/python3 server.py
 Restart=always

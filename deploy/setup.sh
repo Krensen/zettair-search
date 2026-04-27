@@ -220,14 +220,21 @@ else
     log "  enwiki_top1m.docstore already exists — skipping."
 fi
 
-log "Building dbkey map..."
-DBKEYS_FILE="$VOLUME/enwiki_top1m.dbkeys.tsv"
-if [ ! -f "$DBKEYS_FILE" ]; then
-    # If wiki2trec.py wrote the dbkeys file natively, it's already here. Otherwise
-    # generate it from top_titles.txt + docno_map.tsv (one-shot bootstrap).
-    python3 "$WIKI_DIR/build_dbkey_map.py" "$TITLES_FILE" "$WIKI_DIR/docno_map.tsv" "$DBKEYS_FILE"
+log "Building URLs store..."
+URLS_STORE="$VOLUME/enwiki_top1m_urls.store"
+URLS_MAP="$VOLUME/enwiki_top1m_urls.map"
+if [ ! -f "$URLS_STORE" ]; then
+    # wiki2trec.py writes this natively for fresh builds. For an existing
+    # index where wiki2trec was run before this PRD, build_urls_store.py
+    # bootstraps it from a dbkeys.tsv file if one is present.
+    DBKEYS_FILE="$VOLUME/enwiki_top1m.dbkeys.tsv"
+    if [ -f "$DBKEYS_FILE" ]; then
+        python3 "$WIKI_DIR/build_urls_store.py" "$DBKEYS_FILE" "$URLS_STORE" "$URLS_MAP"
+    else
+        log "  WARNING: no dbkeys.tsv found and wiki2trec did not produce a urls store — punctuation links will 404"
+    fi
 else
-    log "  enwiki_top1m.dbkeys.tsv already exists — skipping."
+    log "  enwiki_top1m_urls.store already exists — skipping."
 fi
 
 ### ── 12. Build Zettair index ────────────────────────────────────────────────
