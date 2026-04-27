@@ -239,11 +239,10 @@ fi
 
 ### ── 12. Build Zettair index ────────────────────────────────────────────────
 
-if [ ! -f "$INDEX_DIR/index.cfg" ]; then
+if [ ! -f "$INDEX_DIR/index.param.0" ]; then
     log "Building Zettair index (can take 30-60 min for 1M articles)..."
     mkdir -p "$INDEX_DIR"
-    cd "$INDEX_DIR"
-    "$ZET_BIN" -i -f index "$TREC_FILE"
+    "$ZET_BIN" -i -f "$INDEX_DIR/index" "$TREC_FILE"
     log "Index built at $INDEX_DIR"
 else
     log "Index already exists at $INDEX_DIR — skipping."
@@ -282,7 +281,7 @@ log "  Setup complete!"
 log ""
 log "  Cutover checklist:"
 log "  1. Verify artifacts:"
-log "       ls -lh $INDEX_DIR/index.cfg"
+log "       ls -lh $INDEX_DIR/index.param.0"
 log "       ls -lh $VOLUME/enwiki_top1m.docstore"
 log "       ls -lh $VOLUME/enwiki_top1m_snippets.store"
 log "  2. Smoke-test the index:"
