@@ -37,10 +37,10 @@ ZETTAIR_SEARCH_REPO=https://github.com/Krensen/zettair-search.git
 ZETTAIR_REPO=https://github.com/Krensen/zettair.git
 
 VOLUME=/mnt/wikipedia-source          # Hetzner volume mount point
-CORPUS_SIZE=1000000                   # number of top articles to index
+CORPUS_SIZE=1500000                   # number of top articles to index
 
 ENWIKI_DUMP_URL="https://dumps.wikimedia.org/enwiki/latest/enwiki-latest-pages-articles.xml.bz2"
-BZ2_DELETE_THRESHOLD_GB=25            # auto-delete bz2 after TREC if free space below this
+BZ2_DELETE_THRESHOLD_GB=30            # auto-delete bz2 after TREC if free space below this
 
 CLICKSTREAM_MONTHS="
     2024-01 2024-02 2024-03 2024-04 2024-05 2024-06
