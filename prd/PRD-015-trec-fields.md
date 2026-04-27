@@ -1,4 +1,4 @@
-# PRD-015: First-Class TITLE and URL Fields in TREC Documents
+# PRD-015: Disk-Resident Title and URL Stores
 
 **Status:** Draft  
 **Author:** metabot  
@@ -8,171 +8,173 @@
 
 ## Problem
 
-PRD-014 fixed the broken Wikipedia links by introducing a sidecar file (`enwiki_top1m.dbkeys.tsv`) that maps the mangled `safe_id` form back to the canonical dbkey form. It works, but it's a workaround on top of a workaround:
+PRD-014 fixed the broken Wikipedia links by introducing an in-memory map (`enwiki_top1m.dbkeys.tsv`) that translates Zettair's mangled `safe_id` form back to the canonical dbkey form at query time. It works, but the part that's wrong is **how it's stored**: ~70 MB loaded into a Python `dict` at server startup.
 
-1. `wiki2trec.py` runs every title through `safe_id()` to keep Zettair's `mlparse` tokenizer happy. This is irreversible mangling.
-2. `enwiki_top1m.dbkeys.tsv` is a separate file shipped alongside the index, loaded into RAM at server start, and consulted on every result to undo the damage.
+That's the only data on the entire server that's loaded eagerly into RAM beyond the small autosuggest list. Snippets, images, and the docstore are all on disk, with only their offset maps in memory, and seek-per-lookup at query time. The dbkey map is the odd one out.
 
-The fundamental problem is that we treat Zettair's docno as the human-facing identifier for the article. It isn't — it's an internal index key with awkward syntactic constraints. The dbkey (`Wicked_(2024_film)`) is the correct identifier for the user. The URL (`https://en.wikipedia.org/wiki/Wicked_(2024_film)`) is the correct hyperlink. Neither belongs in the docno field.
-
-When we eventually want to surface other per-document data (the article title in display form, the Wikipedia URL, the canonical Wikidata Q-ID, the article's primary image hint), the sidecar pattern multiplies. Each new field becomes another file to load at startup and another lookup in `enrich_results()`.
+There's also a second-order problem: PRD-014 only ships the dbkey, not the canonical URL. The frontend constructs the URL by string concatenation: `https://en.wikipedia.org/wiki/${docno}`. That works for English Wikipedia today but couples the data layer to the URL format. If we ever index a different source (Simple English again? Wiktionary? something non-Wikipedia?), the URL format becomes another piece of code to change.
 
 ---
 
 ## Goal
 
-Store the canonical title and URL **inside the TREC document**, alongside the text, in fields that Zettair's C summariser can read at query time and emit in its JSON output. The server passes them through to the response. No sidecar files. No startup map loads. No in-memory translation table.
+Replace the in-memory dbkey dict with a disk-resident store using the same `FlatStore` pattern that already serves snippets and images. Store the **canonical URL** (not just the dbkey) so the frontend doesn't construct it. Drop the `_dbkey_map` plumbing entirely.
 
-When this is done, the dbkey sidecar file (`enwiki_top1m.dbkeys.tsv`) and all the code that reads it can be deleted.
+When this is done, server memory drops by ~70 MB at startup, and articles with punctuation in their titles link correctly without any startup-loaded translation table.
 
 ---
 
 ## Design
 
-### TREC document format
+### What changes in the indexing pipeline
 
-Currently `wiki2trec.py` emits:
+`wiki2trec.py` already writes two FlatStore pairs as it processes each article:
+
+- `enwiki_top1m_snippets.store` + `.map` — snippet text, keyed by safe_id
+- `enwiki_top1m_images.store` + `.map` — Wikimedia image URL, keyed by safe_id
+
+We add a third pair, written at the same time, in the same loop, with the same pattern:
+
+- `enwiki_top1m_urls.store` + `.map` — Wikipedia article URL, keyed by safe_id
+
+The store contains the URL string. The map records `{safe_id: [offset, length]}`. Total size: ~50 MB store + ~50 MB map for 1M articles. The map (the only thing in RAM) is the same size as the snippets map — which is already on the volume and well within the existing memory envelope.
+
+For each article, the URL written is:
 
 ```
-<DOC>
-<DOCNO>Wicked__2024_film_</DOCNO>
-<TEXT>
-Wicked (2024 film). Wicked is a 2024 American musical fantasy film...
-</TEXT>
-</DOC>
+https://en.wikipedia.org/wiki/{dbkey}
 ```
 
-After this PRD:
+where `dbkey` is `title.replace(' ', '_')` (parens preserved, all punctuation preserved).
 
-```
-<DOC>
-<DOCNO>Wicked__2024_film_</DOCNO>
-<TITLE>Wicked (2024 film)</TITLE>
-<URL>https://en.wikipedia.org/wiki/Wicked_(2024_film)</URL>
-<TEXT>
-Wicked is a 2024 American musical fantasy film...
-</TEXT>
-</DOC>
-```
+We do **not** ship a separate "title" store. The display-form title is derived trivially from the URL by URL-decoding the path component if needed and replacing underscores with spaces — but in practice, the frontend already does this from the dbkey portion of the URL. One file does both jobs.
 
-The `<DOCNO>` tag remains the safe_id form (Zettair's tokenizer requires this). The `<TITLE>` and `<URL>` fields are stored verbatim — Zettair's `mlparse` parser treats their contents as document text by default, but we'll bypass that for these specific fields (see "Zettair changes" below).
+### What changes in the server
 
-The `<TEXT>` field no longer needs the `Title. ` prefix that wiki2trec currently puts there for searchability — having the title indexed inside `<TEXT>` is exactly what we want for query matching. We keep that prefix as-is.
+`server.py` gets a third `FlatStore` instance:
 
-### Zettair changes
-
-Zettair already has the docmap, an internal record of one entry per document. The docmap stores the docno, document length, weight, and a few bytes of metadata. We add two new variable-length fields to the docmap entry: `title` and `url`.
-
-The C-side changes:
-
-1. **`wiki2trec.py` writes `<TITLE>` and `<URL>` tags.** Trivially.
-
-2. **Zettair recognises `<TITLE>` and `<URL>` during indexing.** In `makeindex.c`, alongside the existing handling for `<DOCNO>`, add similar state-machine branches for `<TITLE>` and `<URL>`. Their content is captured raw (not tokenized) and stored in the docmap entry for that document. This mirrors how `<DOCNO>` content is collected — it's already a special case that bypasses tokenization for the term index, but currently still gets passed through `mlparse_word`. The new fields skip that, keeping every byte intact.
-
-3. **Docmap stores the new fields.** `docmap.c` and `docmap.h` get two new accessor functions: `docmap_get_title(map, docno)` and `docmap_get_url(map, docno)`. Storage on disk: append the two strings (with length prefixes) to the existing variable-length section of each docmap entry.
-
-4. **JSON output emits the new fields.** `commandline.c` (the same file we patched in PRD-011 to add `summary` to the JSON) reads the title and URL from the docmap and includes them in the per-result JSON line:
-
-```json
-{"rank":1,"docno":"Wicked__2024_film_","title":"Wicked (2024 film)","url":"https://en.wikipedia.org/wiki/Wicked_(2024_film)","score":9.82,"docid":12345,"summary":"..."}
+```python
+_urls_store = FlatStore(URLS_STORE_PATH, URLS_MAP_PATH, "urls")
 ```
 
-The size impact on the docmap is real but bounded: 1M articles × ~80 bytes per (title + url) ≈ 80 MB extra. The existing docmap is ~1 MB so this is a real percentage increase, but the total is still trivial.
-
-### Server changes
-
-`server.py` becomes simpler:
+In `enrich_results()`, it replaces the `_dbkey_map` lookup with a `_urls_store.get()` call:
 
 ```python
 def enrich_results(results: list) -> list:
     enriched = []
     for r in results:
-        docno = r.get("docno", "")
+        docno = r.get("docno", "")  # safe_id from zet
         snippet = r.get("summary") or _snippets_store.get(docno) or ""
+        url = _urls_store.get(docno) or f"https://en.wikipedia.org/wiki/{docno}"
         enriched.append({
             "rank": r["rank"],
             "score": r["score"],
             "docid": r["docid"],
             "docno": docno,
-            "title": r.get("title", docno.replace("_", " ")),
-            "url": r.get("url", f"https://en.wikipedia.org/wiki/{docno}"),
+            "url": url,
             "snippet": snippet,
             "image_url": _images_store.get(docno),
         })
     return enriched
 ```
 
-The fallbacks (`docno.replace("_", " ")` for title; constructing the URL from the docno) handle the case where the new fields are absent, which lets us deploy the server change before the C changes are merged without breaking anything. Once the C changes ship, the fallbacks become dead code we can remove later.
+The `docno` field in the response now contains the safe_id again (as it did before PRD-014), but the frontend doesn't use it to build the URL — it uses the new `url` field directly.
 
-### Frontend changes
+The fallback `f"https://en.wikipedia.org/wiki/{docno}"` covers the case where the URL store is missing or doesn't have an entry — so it degrades gracefully (still 404s on punctuation articles, but works for the 77% that don't need remapping).
 
-`index.html` builds the wiki link from `r.docno`. After this PRD it builds it from `r.url` directly. Single line change.
+### What changes in the frontend
 
-The display title shown in result cards currently comes from `r.docno.replace(/_/g, ' ')`. After this PRD it comes from `r.title`. Two lines.
+`index.html` currently has:
+
+```javascript
+const wikiLink = docno => `https://en.wikipedia.org/wiki/${encodeURIComponent(docno)}`;
+```
+
+Becomes:
+
+```javascript
+const wikiLink = r => r.url || `https://en.wikipedia.org/wiki/${encodeURIComponent(r.docno)}`;
+```
+
+(Pass the result object instead of just docno, use the URL if present, fall back to the constructed form.)
+
+The display title shown in result cards currently comes from `r.docno.replace(/_/g, ' ')`. We can leave that alone — the docno (safe_id) is good enough for display purposes ("Wicked (2024 film)" displays fine even though the URL needs the dbkey form), or we can derive the display title from `r.url` by extracting the path component and decoding it. The current approach already works visually — the bug was only in the link target. Leave the display untouched.
+
+### Bootstrapping the existing index
+
+The current index was built before this PRD, so the URL store doesn't exist yet. We have two options:
+
+1. **Build it from the existing `enwiki_top1m.dbkeys.tsv`.** The dbkeys file already contains every safe_id ↔ dbkey pair we need. A one-shot script reads it and writes `enwiki_top1m_urls.store` + `.map`. Takes seconds.
+
+2. **Wait until the next corpus rebuild.** PRD-014's sidecar keeps working in the meantime.
+
+Option 1 is the right call — it lets us deploy the new code immediately and delete the PRD-014 plumbing now rather than waiting for a quarterly rebuild.
+
+A small script `wikipedia/build_urls_store.py` reads `enwiki_top1m.dbkeys.tsv` line by line, appends `https://en.wikipedia.org/wiki/{dbkey}` to the `.store` file, and records offsets in the `.map` file. Mirrors the FlatStore pattern in wiki2trec.py exactly.
+
+For docnos where safe_id == dbkey (no remapping needed), we can either:
+- **Skip them** (saves 75% of the store size). server.py's `_urls_store.get()` returns None for these, the fallback `f"https://en.wikipedia.org/wiki/{docno}"` handles them correctly.
+- **Include them** (~2× the store size, but consistent semantics — every doc has a URL).
+
+Skip them. Same logic as the dbkeys file, same memory savings, fallback already exists.
 
 ---
 
 ## Removing the PRD-014 hack
 
-Once the new fields are in place and verified:
+Once the URL store is in place and verified:
 
 ### Files to delete
 
-| File | Repo |
+| File | Where |
 |---|---|
-| `wikipedia/build_dbkey_map.py` | zettair |
-| `/mnt/wikipedia-source/enwiki_top1m.dbkeys.tsv` | (server volume) |
-| `prd/PRD-014-dbkey-passthrough.md` | zettair-search (or mark superseded) |
+| `wikipedia/build_dbkey_map.py` | `zettair` repo |
+| `/mnt/wikipedia-source/enwiki_top1m.dbkeys.tsv` | server volume |
 
 ### Code to delete
 
 In `server.py`:
-
-- Global `_dbkey_map` declaration
-- `DBKEYS_PATH` constant  
+- Global `_dbkey_map: dict = {}`
+- `DBKEYS_PATH` constant
 - `_load_dbkey_map()` function
 - The `_load_dbkey_map()` call in `lifespan()`
-- The `_dbkey_map.get(docno_raw, docno_raw)` translation in `enrich_results()` (replaced by reading `r["url"]` directly)
+- The `_dbkey_map.get(docno_raw, docno_raw)` translation in `enrich_results()` (already replaced by the URL store lookup)
 
 In `deploy/zettair-search.service`:
-
 - `Environment=ZET_DBKEYS=...`
 
 In `deploy/setup.sh`:
-
-- The "Building dbkey map" step that calls `build_dbkey_map.py`
+- The "Building dbkey map" step that calls `build_dbkey_map.py`. Replaced by a step that calls `build_urls_store.py` (or, after PRD-015 lands in `wiki2trec.py`, deleted entirely because future rebuilds produce the URL store directly).
 
 In `wikipedia/wiki2trec.py`:
-
-- The `dbkeys_path` variable
-- Opening the `dbkeys` file handle
-- The `dbkey_remap` counter and the line writing `safe_id\tdbkey` per article
-- The closing `, {dbkey_remap:,} dbkey remaps` in the final summary line
+- The `dbkeys_path` variable, file handle, write-per-article logic, counter, summary line. Replaced by the equivalent logic that writes the URL store.
 
 PRD-014 marked **Superseded by PRD-015** at the top.
 
 ---
 
-## Why this is correct now even though it was wrong then
+## Why this is the right shape (and the original PRD-015 wasn't)
 
-PRD-014 was the right call at the time. The index existed. Replacing it would have meant 4–8 hours of TREC regeneration plus 30–60 minutes of indexing on the live server. The sidecar shipped in 30 minutes and unblocked the broken links.
+The original PRD-015 proposed adding TITLE and URL as first-class fields in Zettair's docmap, requiring patches to `makeindex.c`, `docmap.c`, and `commandline.c`. After reading those files carefully it became clear that:
 
-PRD-015 is the right call now because:
+- The docmap has no schema version, so old indexes would silently misread under the new binary, or vice versa. Adding versioning is itself a refactor.
+- Three function signatures change (`docmap_add`, plus two new accessors), and every caller of `docmap_add` updates in lockstep.
+- The `psettings` attribute system in `makeindex.c` would either need new attributes added (and the config files updated), or hard-coded tag matching that bypasses the existing pattern.
+- Realistic effort: 6–8 hours of careful C work, with subtle correctness risks in the binary encode/decode.
 
-1. The site has no users, so a rebuild has no cost beyond machine time.
-2. The next quarterly corpus rebuild will happen anyway — folding this in costs nothing extra.
-3. Every additional sidecar makes the system harder to reason about. Killing one *now* (when it's the only one) prevents the pattern from spreading.
-4. Future per-article fields (Wikidata Q-ID, primary category, language links) become trivial to add — just another tag in the TREC and another field in the docmap.
+The FlatStore approach uses a pattern that's **already in production for two stores** (snippets, images), takes ~30 minutes of Python work, and produces the same external behaviour. The architectural purity argument for storing this in Zettair itself is real but not worth the cost.
 
 ---
 
-## Risks
+## Memory and disk impact
 
-1. **Touching `makeindex.c` and `docmap.c` is the most invasive C work to date.** Previous patches (`okapi.c` for click prior, `commandline.c` for JSON output) were narrowly scoped. This patch changes the on-disk docmap format. Backwards incompatibility with previously-built indexes is acceptable (we're rebuilding anyway) but the test suite must pass and any of Zettair's own internal tools (`zet -d`, `zet -e`) must still work.
+| Resource | Before (PRD-014) | After (PRD-015) | Δ |
+|---|---|---|---|
+| Server RAM at startup | ~770 MB | ~700 MB | **−70 MB** |
+| Volume disk usage | +25 MB (dbkeys.tsv) | +50 MB (urls.store + .map) | +25 MB |
+| Per-result query cost | 1 dict lookup | 1 dict lookup + 1 `os.pread` | +<1 μs |
 
-2. **Index size grows.** ~80 MB extra in the docmap on disk and resident at runtime. Trivial in absolute terms but the docmap currently fits in a couple of mmap pages — no longer.
-
-3. **Reindex required.** The whole pipeline (`select_top_articles.py`, `wiki2trec.py`, `zet -i`, `build_docno_map.py`, `build_click_prior.py`, `build_autosuggest.py`, `build_docstore.py`) must be re-run. ~6–10 hours wall time. The existing index can stay live during the rebuild and we cut over with a service restart, exactly like PRD-012.
+Net: ~70 MB RAM reclaimed at the cost of ~25 MB on disk and a sub-microsecond `pread` per result. Fair trade.
 
 ---
 
@@ -180,35 +182,33 @@ PRD-015 is the right call now because:
 
 | File | Repo | Change |
 |---|---|---|
-| `wikipedia/wiki2trec.py` | zettair | Emit `<TITLE>` and `<URL>` tags; remove dbkeys.tsv writing |
-| `devel/src/makeindex.c` | zettair | Recognise `<TITLE>` and `<URL>` tags; capture content raw |
-| `devel/src/docmap.c`, `docmap.h` | zettair | Store and retrieve title and url per document |
-| `devel/src/commandline.c` | zettair | Emit title and url in JSON Lines output |
+| `wikipedia/wiki2trec.py` | zettair | Write `_urls.store` + `_urls.map` per article (mirrors snippets/images); stop writing `dbkeys.tsv` |
+| `wikipedia/build_urls_store.py` | zettair | New — one-shot bootstrap script for the existing index |
 | `wikipedia/build_dbkey_map.py` | zettair | Delete |
-| `server.py` | zettair-search | Read `title` and `url` from result; remove dbkey map loading |
-| `index.html` | zettair-search | Use `r.url` and `r.title` directly |
-| `deploy/zettair-search.service` | zettair-search | Remove `ZET_DBKEYS` |
-| `deploy/setup.sh` | zettair-search | Remove dbkey map build step |
+| `server.py` | zettair-search | Add `_urls_store` FlatStore; emit `url` in response; remove dbkey map plumbing |
+| `index.html` | zettair-search | Use `r.url` for the link target |
+| `deploy/zettair-search.service` | zettair-search | Replace `ZET_DBKEYS` with `ZET_URLS_STORE` and `ZET_URLS_MAP` |
+| `deploy/setup.sh` | zettair-search | Replace dbkey build step with urls store build step |
 
 ---
 
 ## Implementation Order
 
-1. Patch `makeindex.c` and `docmap.c` to handle the new tags. Build, run Zettair's test suite, verify with a small TREC file containing TITLE and URL fields.
-2. Patch `commandline.c` to emit the fields in JSON. Test with `echo 'einstein' | zet ... --output=json`.
-3. Modify `wiki2trec.py` to emit the new tags (keeping the dbkeys.tsv write for now so the live server isn't broken).
-4. Modify `server.py` to read `title` and `url` from results with fallbacks. Deploy. Old index still works because of the fallbacks.
-5. Trigger a full corpus rebuild (`select_top_articles.py` → `wiki2trec.py` → `zet -i` → ...). Cut over to the new index.
-6. Verify the new fields are present and the URLs work for articles with punctuation.
-7. Remove the PRD-014 hack: delete `_dbkey_map` plumbing from `server.py`, drop `ZET_DBKEYS` from the service file, drop the dbkey step from `setup.sh`, delete `build_dbkey_map.py`, update `wiki2trec.py` to stop writing the sidecar, mark PRD-014 superseded.
+1. Modify `wiki2trec.py` to write the urls store/map alongside snippets and images (for future rebuilds). Stop writing `enwiki_top1m.dbkeys.tsv`.
+2. Add `build_urls_store.py` to bootstrap the existing index from `enwiki_top1m.dbkeys.tsv`.
+3. Run `build_urls_store.py` on the server.
+4. Modify `server.py`: add `_urls_store` FlatStore, emit `url` in response, remove `_dbkey_map` plumbing. Service file: swap env vars.
+5. Modify `index.html` to use `r.url`.
+6. Deploy. Verify a punctuation article (Wicked (2024 film)) links correctly.
+7. Delete `build_dbkey_map.py` and `/mnt/wikipedia-source/enwiki_top1m.dbkeys.tsv`. Mark PRD-014 superseded.
 
 ---
 
 ## Success Criteria
 
-1. The TREC file produced by `wiki2trec.py` contains `<TITLE>` and `<URL>` tags for every article.
-2. `zet --output=json` emits `title` and `url` fields on every result line.
-3. Searching for "wicked" on zettair.io and clicking the *(2024 film)* result lands on the correct Wikipedia article — same outcome as PRD-014, but achieved without a sidecar.
-4. `_dbkey_map` no longer exists in `server.py`. `ZET_DBKEYS` no longer exists in the service file.
-5. `enwiki_top1m.dbkeys.tsv` is no longer present on the volume after the next setup run.
-6. Server startup memory usage drops by ~70 MB.
+1. `/search` responses contain a `url` field for every result.
+2. Articles with punctuation in their titles link to the correct Wikipedia URL — same outcome as PRD-014, but via disk-resident data.
+3. `_dbkey_map` no longer exists in `server.py`. `ZET_DBKEYS` no longer exists in the service file.
+4. Server startup memory drops by ~70 MB.
+5. Query latency unchanged (within noise — `os.pread` per result is microseconds).
+6. `enwiki_top1m.dbkeys.tsv` is no longer present on the volume after the next setup run.
