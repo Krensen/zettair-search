@@ -118,8 +118,20 @@ mkdir -p "$SEARCH_DIR/logs"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$SEARCH_DIR/logs"
 
 ### ── 5. Build Zettair binary (deploy) ──────────────────────────────────────
+#
+# After `make`, libtool leaves the binary as a wrapper script at devel/zet
+# that re-links the real ELF binary on first invocation if it can't find a
+# writable build tree. That breaks when a non-deploy user (zettair) runs it.
+# We replace the wrapper with the real binary from .libs/ and make the
+# shared library globally findable so zet runs regardless of CWD or invoker.
 
-if [ ! -f "$ZET_BIN" ]; then
+# Always re-check: $ZET_BIN may exist as the libtool wrapper from a previous run.
+NEEDS_BUILD=1
+if [ -f "$ZET_BIN" ] && file "$ZET_BIN" | grep -q ELF; then
+    NEEDS_BUILD=0
+fi
+
+if [ "$NEEDS_BUILD" = "1" ]; then
     log "Building Zettair..."
     ARCH=$(uname -m)
     if [ "$ARCH" = "aarch64" ]; then
@@ -128,9 +140,23 @@ if [ ! -f "$ZET_BIN" ]; then
         BUILD_FLAG=""
     fi
     as_deploy bash -c "cd '$ZETTAIR_DIR/devel' && ./configure $BUILD_FLAG && make -j$(nproc)"
-    log "Binary built at: $ZET_BIN"
+
+    # Replace the libtool wrapper with the real ELF binary.
+    if [ -f "$ZETTAIR_DIR/devel/.libs/zet" ]; then
+        cp "$ZETTAIR_DIR/devel/.libs/zet" "$ZET_BIN"
+        chmod +x "$ZET_BIN"
+        chown "$DEPLOY_USER:$DEPLOY_USER" "$ZET_BIN"
+    fi
+
+    # Register libzet.so so the bare binary can find it without LD_LIBRARY_PATH.
+    if [ -f "$ZETTAIR_DIR/devel/.libs/libzet.so.0" ]; then
+        ln -sf "$ZETTAIR_DIR/devel/.libs/libzet.so.0" /usr/local/lib/libzet.so.0
+        ldconfig
+    fi
+
+    log "Binary installed at: $ZET_BIN"
 else
-    log "Zettair binary already built — skipping."
+    log "Zettair binary already built (real ELF) — skipping."
 fi
 
 ### ── 6. Download enwiki bz2 dump (zettair, to volume) ──────────────────────
