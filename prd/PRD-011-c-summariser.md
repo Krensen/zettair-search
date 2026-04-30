@@ -1,6 +1,6 @@
 # PRD-011: Use Zettair's Built-in C Summariser
 
-**Status:** Draft  
+**Status:** Superseded by PRD-016  
 **Priority:** Medium  
 **Complexity:** Low (C patch + server.py simplification)
 
