@@ -11,6 +11,9 @@ Environment=ZET_BINARY=/opt/zettair/devel/zet
 Environment=ZET_INDEX=/mnt/wikipedia-source/wikiindex/index
 Environment=ZET_CLICK_PRIOR=/mnt/wikipedia-source/click_prior.bin
 Environment=ZET_CLICK_ALPHA=0.5
+# PRD-017: per-field BM25 boost (1.0 = no boost). Title is the only one
+# emitted by wiki2trec today; the others are reserved for future use.
+Environment=ZET_BOOST_TITLE=3.0
 Environment=ZET_WORKERS=2
 Environment=ZET_QUERY_TIMEOUT=5.0
 Environment=ZET_SNIPPETS_STORE=/mnt/wikipedia-source/enwiki_top1m_snippets.store

@@ -1,6 +1,6 @@
 # PRD-017: Field-Weighted Retrieval (Title First, Generalises to N Fields)
 
-**Status:** Draft  
+**Status:** Implemented (zettair commit `1c1e892`)
 **Author:** metabot  
 **Date:** 2026-04-29
 

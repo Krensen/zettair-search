@@ -35,6 +35,14 @@ ZET_PORT         = int(os.environ.get("ZET_PORT", "8765"))
 ZET_CLICK_PRIOR  = os.environ.get("ZET_CLICK_PRIOR",
     os.path.join(os.path.dirname(__file__), "../zettair/wikipedia/click_prior.bin"))
 ZET_CLICK_ALPHA  = os.environ.get("ZET_CLICK_ALPHA", "0.5")
+# PRD-017: per-field BM25 boosts. zet reads these env vars at startup and
+# multiplies the term frequency contribution of each field-tagged occurrence.
+# 1.0 = no boost; 3.0 is a reasonable starting point for title.
+ZET_BOOST_TITLE    = os.environ.get("ZET_BOOST_TITLE",    "3.0")
+ZET_BOOST_CAPTION  = os.environ.get("ZET_BOOST_CAPTION",  "1.0")
+ZET_BOOST_CATEGORY = os.environ.get("ZET_BOOST_CATEGORY", "1.0")
+ZET_BOOST_SEEALSO  = os.environ.get("ZET_BOOST_SEEALSO",  "1.0")
+ZET_BOOST_INFOBOX  = os.environ.get("ZET_BOOST_INFOBOX",  "1.0")
 ZET_WORKERS      = int(os.environ.get("ZET_WORKERS", "2"))
 ZET_QUERY_TIMEOUT = float(os.environ.get("ZET_QUERY_TIMEOUT", "5.0"))
 
@@ -186,6 +194,12 @@ class ZetPool:
         if os.path.exists(ZET_CLICK_PRIOR):
             self._env["ZET_CLICK_PRIOR"] = ZET_CLICK_PRIOR
             self._env["ZET_CLICK_ALPHA"] = ZET_CLICK_ALPHA
+        # PRD-017: per-field BM25 boosts (always set; 1.0 = no boost)
+        self._env["ZET_BOOST_TITLE"]    = ZET_BOOST_TITLE
+        self._env["ZET_BOOST_CAPTION"]  = ZET_BOOST_CAPTION
+        self._env["ZET_BOOST_CATEGORY"] = ZET_BOOST_CATEGORY
+        self._env["ZET_BOOST_SEEALSO"]  = ZET_BOOST_SEEALSO
+        self._env["ZET_BOOST_INFOBOX"]  = ZET_BOOST_INFOBOX
 
         self._args = [
             ZET_BINARY,
