@@ -171,7 +171,12 @@ class ZetWorker:
                 if obj.get("done"):
                     results.append({"_meta": True,
                                     "total": obj.get("total", 0),
-                                    "took_ms": obj.get("took_ms", 0)})
+                                    "took_ms": obj.get("took_ms", 0),
+                                    "phases": {k: obj.get(k) for k in (
+                                        "parse_ms", "eval_ms", "heap_ms",
+                                        "summary_ms", "decode_ms", "walk_ms",
+                                        "score_ms", "postings", "walk_steps")
+                                        if k in obj}})
                     break
                 results.append(obj)
         self.queries_served += 1
@@ -273,6 +278,7 @@ class ZetPool:
             return {
                 "total": meta.get("total", len(results)),
                 "took_ms": round(meta.get("took_ms", elapsed), 2),
+                "phases": meta.get("phases", {}),
                 "results": results,
             }
         except asyncio.TimeoutError:
@@ -401,7 +407,6 @@ def enrich_results(results: list, query: str) -> tuple[list, dict]:
         "other_stores_ms":  round(t_other * 1000, 2),
     }
     return enriched, timing
-    return enriched
 
 
 # ---------------------------------------------------------------------------
@@ -460,6 +465,7 @@ async def search(
         "query": q,
         "total": parsed["total"],
         "took_ms": parsed["took_ms"],
+        "phases": parsed.get("phases", {}),
         "enrich": enrich_timing,
         "results": results,
     }

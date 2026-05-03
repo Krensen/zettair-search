@@ -742,7 +742,8 @@
   function highlightQuery(snippet, query) {
     if (!snippet || !query) return esc(snippet || '');
     try {
-      const terms = query.trim().toLowerCase().split(/\s+/)
+      // Strip phrase quotes so highlight matches words, not "ozzy or osbourne"
+      const terms = query.trim().toLowerCase().replace(/"/g, ' ').split(/\s+/)
         .filter(t => t.length > 2 && !HIGHLIGHT_STOP.has(t))
         .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
       if (!terms.length) return esc(snippet);
