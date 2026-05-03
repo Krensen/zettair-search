@@ -34,22 +34,20 @@ STOPWORDS = {
     'through', 'over', 'under', 'one', 'two', 'three', 'new', 'first',
 }
 
-# Patterns that mark a fragment as reference/citation noise — mirrors the
-# build_docstore.py line-level filter but applied at fragment level in case
-# any citations survived into the docstore.
+# Patterns that mark a fragment as reference/citation noise.
 _RE_CITATION_FRAG = re.compile(
     r'\bISBN\b'
     r'|^[A-Z][a-z]+,\s+[A-Z].*?\b(19|20)\d{2}\b'   # Surname, Initial YYYY
-    r'|\bpp?\.\s*\d+'                                 # p. 48
-    r'|\bVol\b.*?\bNo\b'                              # Vol X No Y
+    r'|\bpp?\.\s*\d+'                              # p. 48
+    r'|\bVol\b.*?\bNo\b'                           # Vol X No Y
     r'|\bJournal\s+of\b'
     r'|\bUniversity\s+Press\b'
     r'|\bSitzungsberichte\b'
 )
 
-# Verb-like function words that almost always appear in real prose sentences.
-# A fragment lacking any of these is almost certainly a title, heading, or citation.
-_PROSE_VERBS = {
+# Verb-like function words. A fragment without one is almost certainly
+# a title, heading, name, or citation fragment.
+_PROSE_VERBS = frozenset({
     'is', 'are', 'was', 'were', 'be', 'been', 'being',
     'has', 'have', 'had',
     'does', 'do', 'did',
@@ -58,120 +56,126 @@ _PROSE_VERBS = {
     'built', 'created', 'formed', 'caused', 'resulted',
     'worked', 'helped', 'lived', 'died', 'born', 'won', 'lost',
     'said', 'wrote', 'published', 'developed', 'discovered', 'invented',
-    'showed', 'showed', 'came', 'went', 'left', 'started', 'began', 'ended',
-    'gave', 'took', 'put', 'set', 'led', 'led', 'brought', 'meant',
+    'showed', 'came', 'went', 'left', 'started', 'began', 'ended',
+    'gave', 'took', 'put', 'set', 'led', 'brought', 'meant',
     'can', 'could', 'will', 'would', 'may', 'might',
     'includes', 'include', 'included',
     'contains', 'contain', 'contained',
-}
+})
 
-def _is_prose(fragment: str) -> bool:
-    """
-    Return True if the fragment looks like genuine prose (worth showing in a snippet).
-    Filters out: citation titles, headings, bare names, short date strings.
-    """
-    if not fragment:
-        return False
+# Fast char-class strippers via str.translate (≈10× faster than re.sub).
+# Build deletion tables for "non-alphanumeric" and "non-alpha".
+_KEEP_ALNUM = string.ascii_lowercase + string.digits
+_KEEP_ALPHA = string.ascii_lowercase
+_DEL_NONALNUM = str.maketrans('', '', ''.join(c for c in map(chr, range(256)) if c not in _KEEP_ALNUM))
+_DEL_NONALPHA = str.maketrans('', '', ''.join(c for c in map(chr, range(256)) if c not in _KEEP_ALPHA))
 
-    # Must be at least 30 chars — shorter is almost certainly a heading or date
-    if len(fragment) < 30:
-        return False
-
-    # Must have at least 45% alpha characters
-    alpha = sum(1 for c in fragment if c.isalpha())
-    if alpha / len(fragment) < 0.45:
-        return False
-
-    # Reject citation noise that survived docstore cleaning
-    if _RE_CITATION_FRAG.search(fragment):
-        return False
-
-    # Must contain at least one verb-like word — the key prose signal.
-    # Without a verb it's a title, heading, name, or citation fragment.
-    words = set(re.sub(r'[^a-z]', '', w) for w in fragment.lower().split())
-    if not words & _PROSE_VERBS:
-        return False
-
-    return True
+# Sentence boundary regex, compiled once.
+_RE_SENTENCE_SPLIT = re.compile(r'(?<=[.!?])\s+(?=[A-Z(])')
 
 
 def split_fragments(text: str) -> list[str]:
-    """
-    Split text into sentence fragments at sentence-ending punctuation,
-    mimicking the C parser's sentence-boundary detection.
-
-    The C ints/summarise.c splits at punctuation codes < 12, which correspond
-    to sentence-ending characters (.  !  ?  and paragraph/newline boundaries).
-    We replicate that here: split on [.!?] followed by whitespace + capital,
-    and also on bare newlines (paragraph breaks).
-    """
-    # First split on newlines — each line may be a separate sentence/item
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-
+    """Split text into sentence fragments. No quality filter — that runs later."""
     fragments = []
-    for line in lines:
-        # Split within each line on sentence boundaries:
-        # period/!/? followed by space and a capital letter (or end of string)
-        parts = re.split(r'(?<=[.!?])\s+(?=[A-Z(])', line)
-        fragments.extend(p.strip() for p in parts if p.strip())
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        for p in _RE_SENTENCE_SPLIT.split(line):
+            p = p.strip()
+            if p:
+                fragments.append(p)
+    return fragments
 
-    # Filter to prose-quality fragments only
-    return [f for f in fragments if _is_prose(f)]
 
-
-def score_fragment(fragment: str, query_terms: set[str]) -> float:
+def _score_and_check(fragment: str, query_terms: frozenset) -> float:
     """
-    Score a fragment: hits / length (query term density).
-    Mirrors the C: fragments[fragcount].score = (float)hits / (float)fragpos
-    where fragpos counts word+punct pairs (so roughly word count).
+    Combined scorer + prose filter, single pass over words.
+
+    Returns hits/length if the fragment is prose-quality AND has at least
+    one query-term hit, else 0.
+
+    This is the inner loop and runs over every fragment of every document.
+    Optimised for the common case where most fragments have zero hits:
+    walk words, count hits and verb-presence simultaneously, and bail fast
+    if no hits found (no need for further filtering — we'd discard it).
     """
-    words = fragment.lower().split()
+    if len(fragment) < 30:
+        return 0.0
+
+    lower = fragment.lower()
+    words = lower.split()
     if not words:
         return 0.0
-    hits = sum(1 for w in words if re.sub(r'[^a-z0-9]', '', w) in query_terms)
+
+    hits = 0
+    has_verb = False
+    for w in words:
+        # Strip non-alphanumerics for query-term match (fast path: most words
+        # are pure alpha so translate is a no-op).
+        clean = w.translate(_DEL_NONALNUM) if not w.isalnum() else w
+        if clean in query_terms:
+            hits += 1
+        # Verb check: drop digits/punctuation, see if the resulting alpha-
+        # only token is a verb. Same translate trick.
+        if not has_verb:
+            alpha = w.translate(_DEL_NONALPHA) if not w.isalpha() else w
+            if alpha in _PROSE_VERBS:
+                has_verb = True
+
+    if hits == 0:
+        # Score is zero either way; no need for further filtering.
+        return 0.0
+    if not has_verb:
+        return 0.0
+
+    # Cheaper alpha-fraction check than per-char isalpha(): ratio of
+    # translated-length to original.
+    alpha_chars = len(lower.translate(_DEL_NONALPHA))
+    if alpha_chars / len(fragment) < 0.45:
+        return 0.0
+
+    if _RE_CITATION_FRAG.search(fragment):
+        return 0.0
+
     return hits / len(words)
 
 
-def summarise_doc(text: str, query_terms: set[str]) -> str:
+def summarise_doc(text: str, query_terms: set | frozenset) -> str:
     """Generate a query-biased summary for one document."""
+    if not isinstance(query_terms, frozenset):
+        query_terms = frozenset(query_terms)
+
     fragments = split_fragments(text)
     if not fragments:
         return text[:TARGET_CHARS]
 
-    # Score all fragments
-    scored = [(score_fragment(f, query_terms), f) for f in fragments]
-
-    # Keep only fragments with at least one hit
-    scored = [(s, f) for s, f in scored if s > 0]
+    # Single pass: score + prose-filter every fragment.
+    scored = [(s, i, f) for i, f in enumerate(fragments)
+              for s in [_score_and_check(f, query_terms)]
+              if s > 0.0]
 
     if not scored:
-        # No query terms found — return the first sentence or two
+        # No query terms found — return the first fragment or two.
         return ' '.join(fragments[:2])[:TARGET_CHARS]
 
-    # Pick top SHOW_FRAGS by score (stable sort preserves order for ties)
-    # We want the best fragments but also want them to read naturally,
-    # so after selecting the top N, re-sort by their original position.
-    top_scores = sorted(scored, key=lambda x: -x[0])[:SHOW_FRAGS]
-    top_texts = set(f for _, f in top_scores)
+    # Take top SHOW_FRAGS by score, then re-order by original position
+    # so the snippet reads naturally.
+    top = sorted(scored, key=lambda x: -x[0])[:SHOW_FRAGS]
+    top.sort(key=lambda x: x[1])  # by position
+    snippet = ' … '.join(f for _, _, f in top)
 
-    # Re-order by original document position
-    ordered = [f for f in fragments if f in top_texts]
-
-    # Join with ellipsis separator
-    snippet = ' \u2026 '.join(ordered)
-
-    # Trim to target length (at word boundary)
     if len(snippet) > TARGET_CHARS * 2:
-        snippet = snippet[:TARGET_CHARS * 2].rsplit(' ', 1)[0] + '\u2026'
+        snippet = snippet[:TARGET_CHARS * 2].rsplit(' ', 1)[0] + '…'
 
     return snippet
 
 
-def parse_query(query: str) -> set[str]:
+def parse_query(query: str) -> frozenset:
     """Lowercase, strip punctuation, drop stopwords and 1-char terms."""
-    terms: set[str] = set()
+    terms = set()
     for t in query.split():
         t = t.lower().strip(string.punctuation)
         if t and t not in STOPWORDS and len(t) > 1:
             terms.add(t)
-    return terms
+    return frozenset(terms)
