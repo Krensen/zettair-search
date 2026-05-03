@@ -227,7 +227,13 @@ python3 loadtest.py --url https://zettair.io --duration 120 --workers 4
 
 Fetches ~38k real queries from `/suggest` (weighted by click count), fires them concurrently, reports mean/p50/p75/p90/p95/p99/max and a latency histogram.
 
-Baseline on CCX13 (2 vCPU, 8 GB RAM): ~30 req/s, p50 ~250 ms, p95 ~500 ms, p99 ~700 ms.
+Baseline on CCX13 (2 vCPU, 8 GB RAM), 1.5M corpus, 4 workers, 10 concurrent clients:
+~17 req/s, p50 ~500 ms, p95 ~1050 ms, p99 ~1500 ms.
+
+(The earlier 1M corpus on the same box was ~30 req/s, p50 ~250 ms. The 1.5M
+upgrade roughly halved throughput because the bigger index fits less well in
+the page cache and the larger posting lists cost more per query. Throughput
+is CPU-bound at 4 workers on the 2 vCPUs; more workers don't help.)
 
 ---
 
