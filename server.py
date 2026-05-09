@@ -14,6 +14,7 @@ import os
 import re
 import time
 import datetime
+import urllib.parse
 import urllib.request
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query, Request
@@ -511,6 +512,109 @@ async def image_proxy(url: str = Query(...)):
                         headers={"Cache-Control": "public, max-age=86400"})
     except Exception:
         return Response(status_code=404)
+
+
+@app.get("/queries", response_class=HTMLResponse)
+async def queries_page(
+    start: str = Query(None, description="UTC date YYYY-MM-DD (inclusive). Default: 1 day before end."),
+    end: str = Query(None, description="UTC date YYYY-MM-DD (inclusive). Default: today (UTC)."),
+    limit: int = Query(500, ge=1, le=10000, description="Max rows to render."),
+    format: str = Query("html", regex="^(html|json)$"),
+):
+    """Aggregate the query log over a UTC date range, sorted by count."""
+    today = datetime.datetime.utcnow().date()
+    try:
+        end_d = datetime.date.fromisoformat(end) if end else today
+        start_d = datetime.date.fromisoformat(start) if start else (end_d - datetime.timedelta(days=1))
+    except ValueError:
+        return JSONResponse({"error": "start/end must be YYYY-MM-DD"}, status_code=400)
+    if start_d > end_d:
+        return JSONResponse({"error": "start must be <= end"}, status_code=400)
+
+    start_iso = f"{start_d.isoformat()}T00:00:00Z"
+    end_iso = f"{(end_d + datetime.timedelta(days=1)).isoformat()}T00:00:00Z"
+
+    counts: dict[str, int] = {}
+    total_queries = 0
+    parse_errors = 0
+    if os.path.exists(QUERY_LOG):
+        try:
+            with open(QUERY_LOG, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except Exception:
+                        parse_errors += 1
+                        continue
+                    ts = rec.get("ts", "")
+                    if ts < start_iso or ts >= end_iso:
+                        continue
+                    q = (rec.get("q") or "").strip()
+                    if not q:
+                        continue
+                    counts[q] = counts.get(q, 0) + 1
+                    total_queries += 1
+        except Exception as e:
+            return JSONResponse({"error": f"failed to read query log: {e}"}, status_code=500)
+
+    rows = sorted(counts.items(), key=lambda x: (-x[1], x[0]))[:limit]
+
+    if format == "json":
+        return JSONResponse({
+            "start": start_d.isoformat(),
+            "end": end_d.isoformat(),
+            "total_queries": total_queries,
+            "unique_queries": len(counts),
+            "rows": [{"q": q, "count": c} for q, c in rows],
+        })
+
+    def esc(s: str) -> str:
+        return (s.replace("&", "&amp;").replace("<", "&lt;")
+                 .replace(">", "&gt;").replace('"', "&quot;"))
+    body_rows = "\n".join(
+        f'<tr><td class="n">{i+1}</td>'
+        f'<td class="c">{c}</td>'
+        f'<td><a href="/?q={urllib.parse.quote(q)}">{esc(q)}</a></td></tr>'
+        for i, (q, c) in enumerate(rows)
+    )
+    html = f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>Queries {esc(start_d.isoformat())} – {esc(end_d.isoformat())}</title>
+<style>
+body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 900px; margin: 2em auto; padding: 0 1em; color: #222; }}
+h1 {{ font-size: 1.4em; margin-bottom: 0.2em; }}
+.summary {{ color: #666; margin-bottom: 1.5em; font-size: 0.9em; }}
+form {{ margin-bottom: 1.5em; padding: 0.8em; background: #f6f6f6; border-radius: 4px; }}
+form label {{ font-size: 0.9em; margin-right: 0.4em; }}
+form input[type=date], form input[type=number] {{ padding: 0.3em; margin-right: 0.8em; font-size: 0.9em; }}
+form button {{ padding: 0.3em 1em; font-size: 0.9em; cursor: pointer; }}
+table {{ border-collapse: collapse; width: 100%; font-size: 0.92em; }}
+th, td {{ text-align: left; padding: 0.35em 0.6em; border-bottom: 1px solid #eee; }}
+th {{ background: #fafafa; font-weight: 600; }}
+td.n {{ color: #999; width: 3em; text-align: right; }}
+td.c {{ width: 5em; text-align: right; font-variant-numeric: tabular-nums; color: #444; }}
+a {{ color: #1a5fb4; text-decoration: none; }}
+a:hover {{ text-decoration: underline; }}
+</style></head><body>
+<h1>Queries {esc(start_d.isoformat())} – {esc(end_d.isoformat())}</h1>
+<div class="summary">{total_queries:,} total queries, {len(counts):,} unique. Showing top {len(rows):,}.{(' ' + str(parse_errors) + ' malformed log lines skipped.') if parse_errors else ''}</div>
+<form method="get" action="/queries">
+  <label>Start <input type="date" name="start" value="{esc(start_d.isoformat())}"></label>
+  <label>End <input type="date" name="end" value="{esc(end_d.isoformat())}"></label>
+  <label>Limit <input type="number" name="limit" value="{limit}" min="1" max="10000" style="width:6em"></label>
+  <button type="submit">Apply</button>
+  <a href="/queries?start={esc(start_d.isoformat())}&amp;end={esc(end_d.isoformat())}&amp;limit={limit}&amp;format=json" style="margin-left:1em">JSON</a>
+</form>
+<table>
+<thead><tr><th class="n">#</th><th class="c">count</th><th>query</th></tr></thead>
+<tbody>
+{body_rows}
+</tbody>
+</table>
+</body></html>"""
+    return HTMLResponse(html)
 
 
 @app.get("/", response_class=HTMLResponse)
