@@ -2,18 +2,19 @@
 """
 intent.py — classify queries as navigational vs informational.
 
-Samples queries from the autosuggest list (weighted by click count, like
-loadtest.py), runs each through /search, and looks at the BM25 score
-distribution across the top results. Navigational queries ("ozzy osbourne")
-have one clear winner — rank1 score dominates rank2. Informational queries
-("photosynthesis") spread the score more evenly across many relevant docs.
+Pulls the global top-K queries from /suggest (the same head pool we'll be
+generating knowledge-panel summaries for), runs each through /search, and
+looks at the BM25 score distribution across the top results. Navigational
+queries ("ozzy osbourne") have one clear winner — rank1 score dominates
+rank2. Informational queries ("photosynthesis") spread the score more
+evenly across many relevant docs.
 
 The signal is the score ratio rank1/rank2. Reports the distribution and
 samples from each bucket so you can eyeball whether the threshold is sane.
 
 Usage:
-  python3 intent.py                      # 500 queries against localhost:8765
-  python3 intent.py --n 200              # smaller sample
+  python3 intent.py                      # head 2000, classify all
+  python3 intent.py --top 5000 --n 500   # bigger pool, sub-sample 500
   python3 intent.py --url https://zettair.io
 """
 
@@ -26,12 +27,17 @@ import urllib.parse
 import urllib.request
 
 
-def fetch_autosuggest_queries(base_url: str, target: int) -> list[tuple[str, int]]:
-    """Pull (query, count) pairs from /suggest across two-letter prefixes."""
-    alpha = "abcdefghijklmnopqrstuvwxyz"
+def fetch_top_queries(base_url: str, top_k: int) -> list[tuple[str, int]]:
+    """Pull global top-K (query, count) pairs from /suggest.
+
+    /suggest only returns by-count results within a 2-char prefix, so we
+    walk every prefix (aa..zz, plus digits as a safety net), union the
+    results, and globally sort by click count. Stopping early would bias
+    toward early-alphabet prefixes — exactly what we don't want.
+    """
+    alpha = "abcdefghijklmnopqrstuvwxyz0123456789"
     prefixes = [a + b for a in alpha for b in alpha]
-    seen = set()
-    pairs = []
+    seen = {}
     for prefix in prefixes:
         try:
             url = f"{base_url}/suggest?q={prefix}&n=200"
@@ -39,14 +45,16 @@ def fetch_autosuggest_queries(base_url: str, target: int) -> list[tuple[str, int
                 data = json.loads(r.read())
             for s in data.get("suggestions", []):
                 q = s["query"]
-                if q not in seen:
-                    seen.add(q)
-                    pairs.append((q, s["count"]))
+                # /suggest already returns highest-count first per prefix,
+                # but a query can appear under multiple prefixes only if
+                # we vary the prefix scheme — keep the max defensively.
+                c = s["count"]
+                if q not in seen or seen[q] < c:
+                    seen[q] = c
         except Exception:
             pass
-        if len(pairs) >= target:
-            break
-    return pairs
+    pairs = sorted(seen.items(), key=lambda x: -x[1])
+    return pairs[:top_k]
 
 
 def fetch_scores(base_url: str, query: str, n_results: int) -> list[float]:
@@ -59,22 +67,29 @@ def fetch_scores(base_url: str, query: str, n_results: int) -> list[float]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--url", default="http://localhost:8765", help="base URL of the zettair server")
-    parser.add_argument("--n", type=int, default=500, help="number of queries to classify")
+    parser.add_argument("--top", type=int, default=2000, help="size of the head pool to consider (matches knowledge-panel target)")
+    parser.add_argument("--n", type=int, default=0, help="number of queries to classify (0 = classify the whole top pool)")
     parser.add_argument("--seed", type=int, default=0, help="RNG seed for reproducibility")
     parser.add_argument("--samples-per-bucket", type=int, default=8, help="example queries to print per bucket")
     args = parser.parse_args()
 
     random.seed(args.seed)
 
-    print(f"Fetching autosuggest pool from {args.url}...", flush=True)
-    pairs = fetch_autosuggest_queries(args.url, target=args.n * 5)
+    print(f"Fetching top {args.top} queries from {args.url}...", flush=True)
+    pairs = fetch_top_queries(args.url, top_k=args.top)
     if not pairs:
         print("No autosuggest entries returned. Is the server running?")
         return
-    print(f"Got {len(pairs)} unique queries from autosuggest.", flush=True)
+    min_count = pairs[-1][1]
+    max_count = pairs[0][1]
+    print(f"Got {len(pairs)} queries. Click counts: max={max_count}, min={min_count}.", flush=True)
 
-    queries, weights = zip(*pairs)
-    sample = random.choices(queries, weights=weights, k=args.n)
+    queries = [q for q, _ in pairs]
+    if args.n and args.n < len(queries):
+        weights = [c for _, c in pairs]
+        sample = random.choices(queries, weights=weights, k=args.n)
+    else:
+        sample = queries
 
     print(f"Classifying {len(sample)} queries...", flush=True)
     results = []
