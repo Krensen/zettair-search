@@ -62,17 +62,9 @@ def _ts() -> str:
 _LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 
 def _client_ip(request: Request) -> tuple[str, bool]:
-    """Return (ip, is_local). Cloudflare Tunnel and similar reverse proxies
-    forward real client IPs via CF-Connecting-IP / X-Forwarded-For; the raw
-    socket peer is always loopback for proxied traffic. Treat a request as
-    local only when no proxy header is present AND the socket peer is
-    loopback — that catches curl, intent.py, and loadtest.py running on
-    the same host."""
-    headers = request.headers
-    fwd = headers.get("cf-connecting-ip") or headers.get("x-forwarded-for")
-    if fwd:
-        ip = fwd.split(",")[0].strip()
-        return ip, False
+    """Return (ip, is_local). The service is exposed directly — no reverse
+    proxy — so the socket peer IS the real client IP. Forwarding headers
+    are not honoured because anyone can set them."""
     peer = (request.client.host if request.client else "") or ""
     return peer, peer in _LOOPBACK
 

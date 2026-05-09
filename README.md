@@ -51,7 +51,6 @@ deploy/
   setup.sh                  — One-time VPS provisioning (install, build, download, index)
   deploy.sh                 — Called by CI/CD on every push: git pull + restart
   zettair-search.service    — systemd unit for the search service
-  cloudflared.service       — legacy systemd unit, kept for reference, not used
 .github/workflows/deploy.yml — GitHub Actions: SSH → deploy.sh on push to main
 prd/               — Product requirements documents for each major feature
 logs/              — queries.jsonl, clicks.jsonl, zet_crashes.jsonl (gitignored)

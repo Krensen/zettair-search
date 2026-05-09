@@ -4,6 +4,11 @@
 **Author:** metabot  
 **Date:** 2026-04-13
 
+> **Historical note:** the original migration kept Cloudflare Tunnel as the
+> public-facing layer. That layer was later removed; the service is now
+> exposed directly. Cloudflare references below describe the original
+> design and are kept for the record.
+
 ---
 
 ## Problem
