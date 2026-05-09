@@ -57,11 +57,15 @@ def fetch_top_queries(base_url: str, top_k: int) -> list[tuple[str, int]]:
     return pairs[:top_k]
 
 
-def fetch_scores(base_url: str, query: str, n_results: int) -> list[float]:
+def fetch_results(base_url: str, query: str, n_results: int) -> list[dict]:
     url = f"{base_url}/search?q={urllib.parse.quote(query)}&n={n_results}"
     with urllib.request.urlopen(url, timeout=10) as r:
         data = json.loads(r.read())
-    return [x["score"] for x in data.get("results", [])[:n_results]]
+    return data.get("results", [])[:n_results]
+
+
+def normalise(s: str) -> str:
+    return " ".join(s.lower().split())
 
 
 def main() -> None:
@@ -92,58 +96,66 @@ def main() -> None:
         sample = queries
 
     print(f"Classifying {len(sample)} queries...", flush=True)
-    results = []
+    rows = []
     failures = 0
     for q in sample:
         try:
-            scores = fetch_scores(args.url, q, n_results=5)
+            res = fetch_results(args.url, q, n_results=5)
         except Exception:
             failures += 1
             continue
-        if len(scores) < 2 or scores[1] <= 0:
+        if len(res) < 2 or res[1].get("score", 0) <= 0:
             continue
-        r1, r2 = scores[0], scores[1]
-        r3 = scores[2] if len(scores) >= 3 and scores[2] > 0 else r2
-        results.append((q, r1, r2, r3, r1 / r2, r1 / r3))
+        r1, r2 = res[0]["score"], res[1]["score"]
+        title1 = res[0].get("title", "") or ""
+        title_match = normalise(title1) == normalise(q)
+        ratio = r1 / r2
+        rows.append({"q": q, "r1": r1, "r2": r2, "ratio": ratio, "title": title1, "title_match": title_match})
 
-    if not results:
+    if not rows:
         print("No queries returned >=2 scored results — nothing to classify.")
         return
 
-    ratios = sorted(r[4] for r in results)
-    print(f"\n=== {len(results)} queries with valid scores ({failures} request failures) ===")
+    ratios = sorted(r["ratio"] for r in rows)
+    title_matches = sum(1 for r in rows if r["title_match"])
+    print(f"\n=== {len(rows)} queries with valid scores ({failures} request failures) ===")
     print(
         f"rank1/rank2 ratio:  median={statistics.median(ratios):.2f}  "
         f"p25={ratios[len(ratios) // 4]:.2f}  "
         f"p75={ratios[3 * len(ratios) // 4]:.2f}  "
         f"max={max(ratios):.2f}"
     )
+    print(f"rank-1 title is exact-match for query in {title_matches}/{len(rows)} cases ({100.0 * title_matches / len(rows):.1f}%)")
 
-    buckets = [
-        ("strong nav (>=2.0)", 2.0, float("inf")),
-        ("lean nav (1.5-2.0)", 1.5, 2.0),
-        ("ambig (1.2-1.5)", 1.2, 1.5),
-        ("info (<1.2)", 0.0, 1.2),
-    ]
-    counts = {label: 0 for label, _, _ in buckets}
-    for _, _, _, _, ratio, _ in results:
-        for label, lo, hi in buckets:
-            if lo <= ratio < hi:
-                counts[label] += 1
-                break
+    # Classification: nav if (a) rank-1 title is exact match for query, or
+    # (b) score ratio >= 1.05. Otherwise fall back to score-ratio buckets.
+    def bucket_of(r):
+        if r["title_match"]:
+            return "nav (title-match)"
+        if r["ratio"] >= 1.05:
+            return "lean nav (ratio>=1.05)"
+        if r["ratio"] >= 1.02:
+            return "ambig (1.02-1.05)"
+        return "info (<1.02)"
+
+    bucket_order = ["nav (title-match)", "lean nav (ratio>=1.05)", "ambig (1.02-1.05)", "info (<1.02)"]
+    counts = {b: 0 for b in bucket_order}
+    for r in rows:
+        counts[bucket_of(r)] += 1
 
     print("\nclassifier output:")
-    for label, _, _ in buckets:
+    for label in bucket_order:
         v = counts[label]
-        print(f"  {label:<22} {v:5d}  ({100.0 * v / len(results):.1f}%)")
+        print(f"  {label:<28} {v:5d}  ({100.0 * v / len(rows):.1f}%)")
 
     print("\n=== samples from each bucket ===")
-    for label, lo, hi in buckets:
+    for label in bucket_order:
         print(f"\n--- {label} ---")
-        samp = [r for r in results if lo <= r[4] < hi]
+        samp = [r for r in rows if bucket_of(r) == label]
         random.shuffle(samp)
-        for q, r1, r2, r3, ratio, _ in samp[: args.samples_per_bucket]:
-            print(f"  ratio={ratio:5.2f}  r1={r1:6.2f} r2={r2:6.2f} r3={r3:6.2f}  {q}")
+        for r in samp[: args.samples_per_bucket]:
+            tm = "T" if r["title_match"] else " "
+            print(f"  [{tm}] ratio={r['ratio']:5.2f}  r1={r['r1']:6.2f} r2={r['r2']:6.2f}  q={r['q']!r:<35}  title={r['title']!r}")
 
 
 if __name__ == "__main__":
