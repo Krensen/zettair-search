@@ -68,6 +68,15 @@ def normalise(s: str) -> str:
     return " ".join(s.lower().split())
 
 
+def docno_to_title(docno: str) -> str:
+    """Convert a Wikipedia article slug ('Albert_Einstein') back to a
+    human-readable title ('albert einstein') for comparison against a
+    query. /search returns docno but no separate title field, and the
+    docno IS the canonical article identifier — comparing against it
+    is more reliable than parsing markup."""
+    return normalise(docno.replace("_", " "))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--url", default="http://localhost:8765", help="base URL of the zettair server")
@@ -98,17 +107,26 @@ def main() -> None:
     print(f"Classifying {len(sample)} queries...", flush=True)
     rows = []
     failures = 0
+    failure_examples: list[tuple[str, str]] = []
     for q in sample:
         try:
             res = fetch_results(args.url, q, n_results=5)
-        except Exception:
+        except Exception as e:
             failures += 1
+            if len(failure_examples) < 8:
+                failure_examples.append((q, type(e).__name__ + ": " + str(e)[:80]))
             continue
         if len(res) < 2 or res[1].get("score", 0) <= 0:
             continue
         r1, r2 = res[0]["score"], res[1]["score"]
-        title1 = res[0].get("title", "") or ""
-        title_match = normalise(title1) == normalise(q)
+        docno1 = res[0].get("docno", "") or ""
+        title1 = docno_to_title(docno1)
+        qn = normalise(q)
+        # nav if docno equals the query exactly (canonical article hit), or
+        # the query is fully contained in the docno (e.g. q='hawaii' →
+        # docno='hawaii'). Substring match handles cases like q='snoop dogg'
+        # → docno='Snoop_Dogg' identically; we keep it strict for now.
+        title_match = title1 == qn
         ratio = r1 / r2
         rows.append({"q": q, "r1": r1, "r2": r2, "ratio": ratio, "title": title1, "title_match": title_match})
 
@@ -119,6 +137,10 @@ def main() -> None:
     ratios = sorted(r["ratio"] for r in rows)
     title_matches = sum(1 for r in rows if r["title_match"])
     print(f"\n=== {len(rows)} queries with valid scores ({failures} request failures) ===")
+    if failure_examples:
+        print("first failures:")
+        for q, e in failure_examples:
+            print(f"  {q!r:<40}  {e}")
     print(
         f"rank1/rank2 ratio:  median={statistics.median(ratios):.2f}  "
         f"p25={ratios[len(ratios) // 4]:.2f}  "
@@ -155,7 +177,7 @@ def main() -> None:
         random.shuffle(samp)
         for r in samp[: args.samples_per_bucket]:
             tm = "T" if r["title_match"] else " "
-            print(f"  [{tm}] ratio={r['ratio']:5.2f}  r1={r['r1']:6.2f} r2={r['r2']:6.2f}  q={r['q']!r:<35}  title={r['title']!r}")
+            print(f"  [{tm}] ratio={r['ratio']:5.2f}  r1={r['r1']:6.2f} r2={r['r2']:6.2f}  q={r['q']!r:<35}  rank1={r['title']!r}")
 
 
 if __name__ == "__main__":
