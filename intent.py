@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
 """
-intent.py — classify queries as navigational vs informational.
+intent.py — explore nav-vs-info signal in BM25 score curves.
 
 Pulls the global top-K queries from /suggest (the same head pool we'll be
-generating knowledge-panel summaries for), runs each through /search, and
-looks at the BM25 score distribution across the top results. Navigational
-queries ("ozzy osbourne") have one clear winner — rank1 score dominates
-rank2. Informational queries ("photosynthesis") spread the score more
-evenly across many relevant docs.
+generating knowledge-panel summaries for), runs each through /search at
+n=10, and looks at the *shape* of the score curve. The intuition is that
+a navigational query has one dominant doc — so rank-1 captures most of
+the top-10 score mass. An informational query spreads the mass across
+many similarly-relevant docs.
 
-The signal is the score ratio rank1/rank2. Reports the distribution and
-samples from each bucket so you can eyeball whether the threshold is sane.
+The signal we're testing is:
+    mass1 = score[0] / sum(score[0..9])
+
+mass1 is bounded [0.1, 1.0]: 0.1 means perfectly flat (all 10 docs
+equally relevant), higher means more concentrated on rank-1. We don't
+classify yet — this run just reports the histogram of mass1 and prints
+sample top-10 score curves so the right threshold can be eyeballed.
 
 Usage:
-  python3 intent.py                      # head 2000, classify all
-  python3 intent.py --top 5000 --n 500   # bigger pool, sub-sample 500
+  python3 intent.py                      # head 2000, n=10 results each
+  python3 intent.py --top 500            # smaller pool, faster
   python3 intent.py --url https://zettair.io
 """
 
@@ -28,13 +33,7 @@ import urllib.request
 
 
 def fetch_top_queries(base_url: str, top_k: int) -> list[tuple[str, int]]:
-    """Pull global top-K (query, count) pairs from /suggest.
-
-    /suggest only returns by-count results within a 2-char prefix, so we
-    walk every prefix (aa..zz, plus digits as a safety net), union the
-    results, and globally sort by click count. Stopping early would bias
-    toward early-alphabet prefixes — exactly what we don't want.
-    """
+    """Pull global top-K (query, count) pairs from /suggest."""
     alpha = "abcdefghijklmnopqrstuvwxyz0123456789"
     prefixes = [a + b for a in alpha for b in alpha]
     seen = {}
@@ -45,9 +44,6 @@ def fetch_top_queries(base_url: str, top_k: int) -> list[tuple[str, int]]:
                 data = json.loads(r.read())
             for s in data.get("suggestions", []):
                 q = s["query"]
-                # /suggest already returns highest-count first per prefix,
-                # but a query can appear under multiple prefixes only if
-                # we vary the prefix scheme — keep the max defensively.
                 c = s["count"]
                 if q not in seen or seen[q] < c:
                     seen[q] = c
@@ -59,7 +55,7 @@ def fetch_top_queries(base_url: str, top_k: int) -> list[tuple[str, int]]:
 
 def fetch_results(base_url: str, query: str, n_results: int) -> list[dict]:
     url = f"{base_url}/search?q={urllib.parse.quote(query)}&n={n_results}"
-    with urllib.request.urlopen(url, timeout=10) as r:
+    with urllib.request.urlopen(url, timeout=15) as r:
         data = json.loads(r.read())
     return data.get("results", [])[:n_results]
 
@@ -69,21 +65,40 @@ def normalise(s: str) -> str:
 
 
 def docno_to_title(docno: str) -> str:
-    """Convert a Wikipedia article slug ('Albert_Einstein') back to a
-    human-readable title ('albert einstein') for comparison against a
-    query. /search returns docno but no separate title field, and the
-    docno IS the canonical article identifier — comparing against it
-    is more reliable than parsing markup."""
     return normalise(docno.replace("_", " "))
+
+
+def histogram(values: list[float], lo: float, hi: float, n_buckets: int = 20) -> str:
+    """Render an ASCII histogram with fixed-width bars."""
+    if not values:
+        return "(no data)"
+    width = (hi - lo) / n_buckets
+    counts = [0] * n_buckets
+    for v in values:
+        i = int((v - lo) / width)
+        if i < 0:
+            i = 0
+        elif i >= n_buckets:
+            i = n_buckets - 1
+        counts[i] += 1
+    max_c = max(counts) or 1
+    lines = []
+    for i, c in enumerate(counts):
+        edge_lo = lo + i * width
+        edge_hi = edge_lo + width
+        bar = "#" * int(40 * c / max_c)
+        lines.append(f"  {edge_lo:5.2f}–{edge_hi:5.2f}  {c:5d}  {bar}")
+    return "\n".join(lines)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--url", default="http://localhost:8765", help="base URL of the zettair server")
-    parser.add_argument("--top", type=int, default=2000, help="size of the head pool to consider (matches knowledge-panel target)")
-    parser.add_argument("--n", type=int, default=0, help="number of queries to classify (0 = classify the whole top pool)")
-    parser.add_argument("--seed", type=int, default=0, help="RNG seed for reproducibility")
-    parser.add_argument("--samples-per-bucket", type=int, default=8, help="example queries to print per bucket")
+    parser.add_argument("--top", type=int, default=2000, help="size of the head pool to consider")
+    parser.add_argument("--k", type=int, default=10, help="top-K results per query (default 10)")
+    parser.add_argument("--n", type=int, default=0, help="number of queries to classify (0 = whole top pool)")
+    parser.add_argument("--seed", type=int, default=0, help="RNG seed")
+    parser.add_argument("--samples", type=int, default=12, help="curves to print per zone (low / mid / high mass1)")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -93,9 +108,7 @@ def main() -> None:
     if not pairs:
         print("No autosuggest entries returned. Is the server running?")
         return
-    min_count = pairs[-1][1]
-    max_count = pairs[0][1]
-    print(f"Got {len(pairs)} queries. Click counts: max={max_count}, min={min_count}.", flush=True)
+    print(f"Got {len(pairs)} queries (max click count {pairs[0][1]}, min {pairs[-1][1]}).", flush=True)
 
     queries = [q for q, _ in pairs]
     if args.n and args.n < len(queries):
@@ -104,80 +117,77 @@ def main() -> None:
     else:
         sample = queries
 
-    print(f"Classifying {len(sample)} queries...", flush=True)
+    print(f"Fetching top-{args.k} for {len(sample)} queries...", flush=True)
     rows = []
     failures = 0
     failure_examples: list[tuple[str, str]] = []
     for q in sample:
         try:
-            res = fetch_results(args.url, q, n_results=5)
+            res = fetch_results(args.url, q, n_results=args.k)
         except Exception as e:
             failures += 1
             if len(failure_examples) < 8:
                 failure_examples.append((q, type(e).__name__ + ": " + str(e)[:80]))
             continue
-        if len(res) < 2 or res[1].get("score", 0) <= 0:
+        scores = [r.get("score", 0.0) for r in res]
+        # require K full results; queries with too-few hits are not in the head we care about
+        if len(scores) < args.k:
             continue
-        r1, r2 = res[0]["score"], res[1]["score"]
-        docno1 = res[0].get("docno", "") or ""
-        title1 = docno_to_title(docno1)
-        qn = normalise(q)
-        # nav if docno equals the query exactly (canonical article hit), or
-        # the query is fully contained in the docno (e.g. q='hawaii' →
-        # docno='hawaii'). Substring match handles cases like q='snoop dogg'
-        # → docno='Snoop_Dogg' identically; we keep it strict for now.
-        title_match = title1 == qn
-        ratio = r1 / r2
-        rows.append({"q": q, "r1": r1, "r2": r2, "ratio": ratio, "title": title1, "title_match": title_match})
+        if scores[0] <= 0 or sum(scores) <= 0:
+            continue
+        total = sum(scores)
+        mass1 = scores[0] / total
+        mass3 = sum(scores[:3]) / total  # top-3 share, useful as a secondary signal
+        rank1_doc = docno_to_title(res[0].get("docno", "") or "")
+        rows.append({
+            "q": q,
+            "scores": scores,
+            "mass1": mass1,
+            "mass3": mass3,
+            "ratio12": scores[0] / scores[1] if scores[1] > 0 else float("inf"),
+            "rank1": rank1_doc,
+        })
 
     if not rows:
-        print("No queries returned >=2 scored results — nothing to classify.")
+        print("No usable rows.")
         return
 
-    ratios = sorted(r["ratio"] for r in rows)
-    title_matches = sum(1 for r in rows if r["title_match"])
-    print(f"\n=== {len(rows)} queries with valid scores ({failures} request failures) ===")
+    rows.sort(key=lambda r: r["mass1"])
+
+    masses = [r["mass1"] for r in rows]
+    print(f"\n=== {len(rows)} queries with full top-{args.k} ({failures} request failures) ===")
     if failure_examples:
         print("first failures:")
         for q, e in failure_examples:
             print(f"  {q!r:<40}  {e}")
     print(
-        f"rank1/rank2 ratio:  median={statistics.median(ratios):.2f}  "
-        f"p25={ratios[len(ratios) // 4]:.2f}  "
-        f"p75={ratios[3 * len(ratios) // 4]:.2f}  "
-        f"max={max(ratios):.2f}"
+        f"mass1 = score[0] / sum(score[0..{args.k - 1}]):  "
+        f"min={min(masses):.3f}  p25={masses[len(masses) // 4]:.3f}  "
+        f"median={statistics.median(masses):.3f}  "
+        f"p75={masses[3 * len(masses) // 4]:.3f}  max={max(masses):.3f}"
     )
-    print(f"rank-1 title is exact-match for query in {title_matches}/{len(rows)} cases ({100.0 * title_matches / len(rows):.1f}%)")
+    # mass1 is bounded [1/k, 1.0] — render across that range
+    print(f"\nhistogram of mass1 (lower = flatter curve, higher = peakier):")
+    print(histogram(masses, lo=1.0 / args.k, hi=1.0, n_buckets=20))
 
-    # Classification: nav if (a) rank-1 title is exact match for query, or
-    # (b) score ratio >= 1.05. Otherwise fall back to score-ratio buckets.
-    def bucket_of(r):
-        if r["title_match"]:
-            return "nav (title-match)"
-        if r["ratio"] >= 1.05:
-            return "lean nav (ratio>=1.05)"
-        if r["ratio"] >= 1.02:
-            return "ambig (1.02-1.05)"
-        return "info (<1.02)"
-
-    bucket_order = ["nav (title-match)", "lean nav (ratio>=1.05)", "ambig (1.02-1.05)", "info (<1.02)"]
-    counts = {b: 0 for b in bucket_order}
-    for r in rows:
-        counts[bucket_of(r)] += 1
-
-    print("\nclassifier output:")
-    for label in bucket_order:
-        v = counts[label]
-        print(f"  {label:<28} {v:5d}  ({100.0 * v / len(rows):.1f}%)")
-
-    print("\n=== samples from each bucket ===")
-    for label in bucket_order:
+    # Print sample curves from low / mid / high mass1 — eyeball whether the
+    # shape matches the intuition before committing to a threshold.
+    n = len(rows)
+    zones = [
+        ("LOW mass1 (flattest curves — likely info)",  rows[: max(1, n // 10)]),
+        ("MID mass1 (middle of distribution)",          rows[(n // 2) - args.samples : (n // 2) + args.samples]),
+        ("HIGH mass1 (peakiest curves — likely nav)",   rows[-max(1, n // 10) :]),
+    ]
+    for label, zone in zones:
         print(f"\n--- {label} ---")
-        samp = [r for r in rows if bucket_of(r) == label]
-        random.shuffle(samp)
-        for r in samp[: args.samples_per_bucket]:
-            tm = "T" if r["title_match"] else " "
-            print(f"  [{tm}] ratio={r['ratio']:5.2f}  r1={r['r1']:6.2f} r2={r['r2']:6.2f}  q={r['q']!r:<35}  rank1={r['title']!r}")
+        random.shuffle(zone)
+        for r in zone[: args.samples]:
+            curve = " ".join(f"{s:5.2f}" for s in r["scores"])
+            print(
+                f"  mass1={r['mass1']:.3f}  mass3={r['mass3']:.3f}  "
+                f"r1/r2={r['ratio12']:5.2f}  q={r['q']!r:<35}  rank1={r['rank1']!r}"
+            )
+            print(f"    curve: {curve}")
 
 
 if __name__ == "__main__":
