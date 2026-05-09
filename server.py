@@ -59,6 +59,23 @@ _log_lock = asyncio.Lock()
 def _ts() -> str:
     return datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
+_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+def _client_ip(request: Request) -> tuple[str, bool]:
+    """Return (ip, is_local). Cloudflare Tunnel and similar reverse proxies
+    forward real client IPs via CF-Connecting-IP / X-Forwarded-For; the raw
+    socket peer is always loopback for proxied traffic. Treat a request as
+    local only when no proxy header is present AND the socket peer is
+    loopback — that catches curl, intent.py, and loadtest.py running on
+    the same host."""
+    headers = request.headers
+    fwd = headers.get("cf-connecting-ip") or headers.get("x-forwarded-for")
+    if fwd:
+        ip = fwd.split(",")[0].strip()
+        return ip, False
+    peer = (request.client.host if request.client else "") or ""
+    return peer, peer in _LOOPBACK
+
 async def _append_log(path: str, record: dict):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     async with _log_lock:
@@ -440,6 +457,7 @@ async def suggest(
 
 @app.get("/search")
 async def search(
+    request: Request,
     q: str = Query(..., description="Search query"),
     n: int = Query(10, ge=1, le=100, description="Number of results"),
 ):
@@ -455,11 +473,14 @@ async def search(
 
     results, enrich_timing = enrich_results(parsed["results"], q.strip())
 
+    ip, is_local = _client_ip(request)
     asyncio.create_task(_append_log(QUERY_LOG, {
         "ts": _ts(),
         "q": q.strip(),
         "total": parsed["total"],
         "took_ms": parsed["took_ms"],
+        "ip": ip,
+        "local": is_local,
     }))
 
     return {
@@ -480,14 +501,17 @@ class ClickEvent(BaseModel):
 
 
 @app.post("/click")
-async def click(event: ClickEvent):
+async def click(event: ClickEvent, request: Request):
     """Log a result click."""
+    ip, is_local = _client_ip(request)
     asyncio.create_task(_append_log(CLICK_LOG, {
         "ts": _ts(),
         "q": event.q,
         "docno": event.docno,
         "rank": event.rank,
         "score": event.score,
+        "ip": ip,
+        "local": is_local,
     }))
     return {"ok": True}
 
@@ -519,6 +543,7 @@ async def queries_page(
     start: str = Query(None, description="UTC date YYYY-MM-DD (inclusive). Default: 1 day before end."),
     end: str = Query(None, description="UTC date YYYY-MM-DD (inclusive). Default: today (UTC)."),
     limit: int = Query(500, ge=1, le=10000, description="Max rows to render."),
+    include_local: int = Query(0, description="1 = include localhost test traffic (curl, intent.py, loadtest.py)"),
     format: str = Query("html", regex="^(html|json)$"),
 ):
     """Aggregate the query log over a UTC date range, sorted by count."""
@@ -536,6 +561,7 @@ async def queries_page(
 
     counts: dict[str, int] = {}
     total_queries = 0
+    skipped_local = 0
     parse_errors = 0
     if os.path.exists(QUERY_LOG):
         try:
@@ -551,6 +577,9 @@ async def queries_page(
                         continue
                     ts = rec.get("ts", "")
                     if ts < start_iso or ts >= end_iso:
+                        continue
+                    if not include_local and rec.get("local"):
+                        skipped_local += 1
                         continue
                     q = (rec.get("q") or "").strip()
                     if not q:
@@ -568,6 +597,8 @@ async def queries_page(
             "end": end_d.isoformat(),
             "total_queries": total_queries,
             "unique_queries": len(counts),
+            "skipped_local": skipped_local,
+            "include_local": bool(include_local),
             "rows": [{"q": q, "count": c} for q, c in rows],
         })
 
@@ -599,13 +630,14 @@ a {{ color: #1a5fb4; text-decoration: none; }}
 a:hover {{ text-decoration: underline; }}
 </style></head><body>
 <h1>Queries {esc(start_d.isoformat())} – {esc(end_d.isoformat())}</h1>
-<div class="summary">{total_queries:,} total queries, {len(counts):,} unique. Showing top {len(rows):,}.{(' ' + str(parse_errors) + ' malformed log lines skipped.') if parse_errors else ''}</div>
+<div class="summary">{total_queries:,} total queries, {len(counts):,} unique. Showing top {len(rows):,}.{(' ' + f'{skipped_local:,} localhost test queries excluded.') if skipped_local else ''}{(' ' + str(parse_errors) + ' malformed log lines skipped.') if parse_errors else ''}</div>
 <form method="get" action="/queries">
   <label>Start <input type="date" name="start" value="{esc(start_d.isoformat())}"></label>
   <label>End <input type="date" name="end" value="{esc(end_d.isoformat())}"></label>
   <label>Limit <input type="number" name="limit" value="{limit}" min="1" max="10000" style="width:6em"></label>
+  <label><input type="checkbox" name="include_local" value="1"{' checked' if include_local else ''}> include localhost</label>
   <button type="submit">Apply</button>
-  <a href="/queries?start={esc(start_d.isoformat())}&amp;end={esc(end_d.isoformat())}&amp;limit={limit}&amp;format=json" style="margin-left:1em">JSON</a>
+  <a href="/queries?start={esc(start_d.isoformat())}&amp;end={esc(end_d.isoformat())}&amp;limit={limit}&amp;include_local={1 if include_local else 0}&amp;format=json" style="margin-left:1em">JSON</a>
 </form>
 <table>
 <thead><tr><th class="n">#</th><th class="c">count</th><th>query</th></tr></thead>
