@@ -1,6 +1,6 @@
 # PRD-019: Per-Field BM25 — Separate Length Norm and IDF Per Field
 
-**Status:** Draft
+**Status:** M1+M2 implemented (zettair commit `f397601`, gated on `ZET_PERFIELD_BM25=1`, OR-decode path only). Per-doc field lengths live in a **sidecar** for now — should be folded into the docmap as M3. See "TODO: fold sidecars into the docmap" below.
 **Author:** metabot
 **Date:** 2026-05-10
 
@@ -75,16 +75,16 @@ Unchanged. Each posting offset already encodes the field_id in the low 4 bits (P
 
 ### Per-doc field lengths
 
-The docmap entry currently stores one `nwords` per doc (the whole-doc word count). We need per-field length. Two options:
+The docmap entry currently stores one `nwords` per doc (the whole-doc word count). We need per-field length. Two real options:
 
-1. **Extend `docmap_entry`** to carry an array of `field_lengths[POSTINGS_MAX_FIELDS]`. Simple but bloats the docmap by 64 bytes/doc (16 × `uint32`). At 1.5M docs that's ~95 MB.
-2. **Sidecar file**: `field_lengths.bin` — `(N_docs × N_fields × uint32)` mmap'd at startup, indexed by `(docno, field_id)`. Same total size on disk but doesn't touch the docmap format.
+1. **Extend `docmap_entry`** to carry `field_words[POSTINGS_MAX_FIELDS]`. The natural place — `nwords` already lives there, per-field word counts are conceptually identical, and `makeindex.c` already knows the field_id of each posting. Costs: docmap format bump (existing indexes need rebuilding), and ~95 MB added to the docmap (64 bytes/doc × 1.5M docs).
+2. **Sidecar file**: `field_lengths.bin` — `(N_docs × N_fields × uint32)` mmap'd at startup, indexed by `(docno, field_id)`. Same total size on disk, but doesn't touch the docmap format. Loaded only when `ZET_PERFIELD_BM25=1`.
 
-Recommend (2). Rationale: docmap is a hot, small, frequently-accessed structure; keeping it tight matters. A sidecar is an mmap, accessed only during scoring, can be loaded lazily, and doesn't force a docmap format bump every time we add a field type.
+**v1 ships sidecar (option 2).** The honest reason is sequencing: it's the smallest local change to validate the BM25F math without committing to a docmap format migration. The sidecar is gated by `ZET_PERFIELD_BM25=1` so it's invisible to the default scoring path; existing indexes work unchanged.
 
-The sidecar uses one `uint32` per (doc, field) cell; zero is "no occurrences in this field" (the field is absent for that doc). Most docs have only body + title populated; cells for unused fields are simply zero, no special encoding needed. With 16 fields × 1.5M docs × 4 bytes = ~95 MB. Storage is fine.
+This is acknowledged technical debt — see "TODO: fold sidecars into the docmap" below. The sidecar should not survive M3.
 
-Actually — many fields will be absent from many docs, so the dense layout wastes ~85% of cells. Worth considering a **sparse layout** keyed on (docno, field_id) → length. But the dense layout has random-access in O(1), which matters at score time when we're hitting it once per posting per query term. Stick with dense for v1; revisit if size becomes a problem.
+Layout details: dense `uint32` per (doc, field) cell, zero = "no occurrences in this field". Most docs have only body + title populated; cells for unused fields are simply zero, no special encoding needed. Random-access by `(docno, field_id)` is O(1).
 
 ### Per-field corpus statistics
 
@@ -95,7 +95,7 @@ double avg_L[POSTINGS_MAX_FIELDS];     // mean field length across docs that hav
 unsigned int N_field[POSTINGS_MAX_FIELDS];  // number of docs that contain field f at all
 ```
 
-Computed once at index-build time and written into a small header file (`field_stats.bin`) alongside the field-lengths sidecar.
+v1 ships these in a small `field_stats.bin` companion to the field-lengths sidecar. M3 should fold both into `struct docmap.agg` (which already carries `avg_words`, `sum_words`, `avg_dwords`, etc.) — same sidecar caveat as above.
 
 ### Per-field IDF
 
@@ -183,19 +183,44 @@ For the production server: during the reindex pipeline (already invoked when ref
 
 ## Milestones
 
-1. **M1 — sidecar + corpus stats**: Write `field_lengths.bin` + `field_stats.bin` at index-build time. Load both at startup. No score changes yet — verify the per-field length data is correct by spot-checking a few articles.
+1. **M1 — sidecar + corpus stats** ✅ *(zettair `f397601`)*: Write `field_lengths.bin` + `field_stats.bin` from a TREC file via `wikipedia/build_field_lengths.py`. Load both in okapi.c at startup when `ZET_PERFIELD_BM25=1`. Verified on a 25-doc synthetic test corpus.
 
-2. **M2 — per-field BM25 in `or_decode_offsets`**: Refactor the OR path to accumulate `f_dt_f[]` and compute the per-field sum. Run side-by-side with the per-occurrence-boost path; gate behind a flag. Compare scores on the test set.
+2. **M2 — per-field BM25 in `or_decode_offsets`** ✅ *(zettair `f397601`)*: OR path accumulates `f_dt_f[]` and computes the per-field sum via `perfield_score()`. Gated by `ZET_PERFIELD_BM25=1`. Local test: 11/11 pass with the new path, 8/11 pass on the per-occurrence-boost baseline (the 3 fixed are exactly the title-length-norm cases).
 
-3. **M3 — extend to AND and thresh paths**: Apply the same refactor to `and_decode_offsets` and `thresh_decode_offsets`. (These paths handle multi-term queries with conjunctions.)
+3. **M3 — fold sidecars into the docmap + extend to AND/thresh paths**: Two changes that should land together:
+   - Move `field_words[POSTINGS_MAX_FIELDS]` into `struct docmap_entry`. Move `avg_field_words[]` and `n_with_field[]` into `struct docmap.agg`. Bump the on-disk docmap format. Update `makeindex.c` to write per-field word counts as it parses each doc — the field_id is already known at that point thanks to PRD-017.
+   - Apply the same `f_dt_f[]` refactor to `and_decode_offsets` and `thresh_decode_offsets`. Replace `g_field_lengths[]` reads with `DOCMAP_GET_FIELD_WORDS(map, docno, field_id)`.
+   - Delete `build_field_lengths.py`, the setup.sh sidecar build step, and the `ZET_FIELD_LENGTHS_PATH` / `ZET_FIELD_STATS_PATH` env vars.
 
 4. **M4 — remove per-occurrence boost**: Delete `g_field_boost[]`, fold env-var parsing into per-field arrays. Single source of truth.
 
 5. **M5 — per-field IDF (optional)**: Add the on-the-fly per-field doc-frequency accumulation. Use it when `ZET_FIELD_IDF=on`.
 
-6. **M6 — production rollout**: Trigger reindex with new sidecars. Update systemd unit env vars. Verify Morrissey, Mark Zuckerberg, and other previously-broken queries.
+6. **M6 — production rollout**: Trigger reindex with the new docmap format (M3 forces a reindex anyway). Flip `ZET_PERFIELD_BM25=1` in the systemd unit. Verify Morrissey, Mark Zuckerberg, and other previously-broken queries.
 
-M1 and M2 are the riskiest; once those are correct, the rest is mechanical.
+M1 and M2 are done; M3 is the format migration that retires the sidecars.
+
+---
+
+## TODO: fold sidecars into the docmap
+
+The current sidecar (`field_lengths.bin` + `field_stats.bin`) is a deliberate v1 simplification. It works, but it has the wrong shape for permanent code:
+
+- **Per-field word counts are intrinsic to the index**, in the same way that whole-doc word count is. They're written once at index-build time and read at every query. They have no business being a separate file — the docmap is exactly where "per-doc statistics computed at index time" lives.
+- **`docmap_entry` already has `unsigned int words`**. Adding `unsigned int field_words[POSTINGS_MAX_FIELDS]` alongside it is the obvious extension.
+- **`docmap.agg` already has `avg_words`, `sum_words`, `avg_dwords`, etc.** Adding `avg_field_words[POSTINGS_MAX_FIELDS]` and `n_with_field[POSTINGS_MAX_FIELDS]` is the obvious extension.
+- **Sidecars create a coherence hazard**: rebuild the index without rebuilding the sidecar, and the sidecar's docno alignment silently breaks. We've already lived through this once with `click_prior.bin` (PRD-006), where stale data went undetected for weeks. Putting the per-field lengths in the docmap means they travel with the index — impossible to get out of sync.
+
+What stops us doing this right now is that bumping the docmap on-disk format means existing indexes need rebuilding. We're going to rebuild anyway when we add caption/category/infobox tags to `wiki2trec.py`, so M3 is the natural place to bundle the docmap migration with the AND/thresh refactor. Doing both at once means we only force a reindex once.
+
+When this happens, delete:
+- `wikipedia/build_field_lengths.py`
+- `field_lengths.bin` and `field_stats.bin` from the volume layout
+- `okapi_load_perfield()` and the `g_field_lengths` / `g_field_avg_len` / `g_field_n_with` globals in `okapi.c`
+- `ZET_FIELD_LENGTHS_PATH` and `ZET_FIELD_STATS_PATH` env vars
+- The setup.sh sidecar build step (12a)
+
+Replace with `DOCMAP_GET_FIELD_WORDS(map, docno, field_id)` accessor and `docmap_avg_field_words(map, field_id)` for the corpus stats.
 
 ---
 
