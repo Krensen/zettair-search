@@ -27,6 +27,10 @@ Environment=ZET_URLS_MAP=/mnt/wikipedia-source/enwiki_top1m_urls.map
 Environment=ZET_AUTOSUGGEST=/mnt/wikipedia-source/autosuggest.json
 Environment=ZET_DOCSTORE=/mnt/wikipedia-source/enwiki_top1m.docstore
 Environment=ZET_DOCMAP=/mnt/wikipedia-source/enwiki_top1m.docmap
+# PRD-018: knowledge-panel summary store. Hand-fed via
+# tools/summaries_admin.py until the M3-M6 offline pipeline ships.
+Environment=ZET_SUMMARIES_STORE=/mnt/wikipedia-source/summaries.store
+Environment=ZET_SUMMARIES_MAP=/mnt/wikipedia-source/summaries.map
 
 # PRD-019: per-field BM25 (BM25F). Live. Sidecars index.field_lengths
 # and index.field_stats live next to the index and are auto-discovered
