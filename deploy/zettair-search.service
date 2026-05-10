@@ -9,10 +9,12 @@ WorkingDirectory=/opt/zettair-search
 
 Environment=ZET_BINARY=/opt/zettair/devel/zet
 Environment=ZET_INDEX=/mnt/wikipedia-source/wikiindex/index
-Environment=ZET_CLICK_PRIOR=/mnt/wikipedia-source/click_prior.bin
+# Click prior lives next to the index — built and aligned with the live
+# docid space by setup.sh (which passes --index <path> to build_click_prior).
+Environment=ZET_CLICK_PRIOR=/mnt/wikipedia-source/wikiindex/index.click_prior.bin
 Environment=ZET_CLICK_ALPHA=0.05
-# PRD-017: per-field BM25 boost (1.0 = no boost). Title is the only one
-# emitted by wiki2trec today; the others are reserved for future use.
+# PRD-017: per-occurrence boost for title-tagged terms. Used only on the
+# legacy scoring path (ZET_PERFIELD_BM25=0); ignored when PRD-019 is on.
 Environment=ZET_BOOST_TITLE=5.0
 Environment=ZET_WORKERS=2
 Environment=ZET_QUERY_TIMEOUT=5.0
@@ -26,18 +28,14 @@ Environment=ZET_AUTOSUGGEST=/mnt/wikipedia-source/autosuggest.json
 Environment=ZET_DOCSTORE=/mnt/wikipedia-source/enwiki_top1m.docstore
 Environment=ZET_DOCMAP=/mnt/wikipedia-source/enwiki_top1m.docmap
 
-# PRD-019: per-field BM25 (BM25F). Off by default — flip ZET_PERFIELD_BM25
-# to 1 to enable. Sidecars built by setup.sh / build_field_lengths.py.
-# Per-field weights and length-norm parameters can be tuned without restart
-# by editing this file and running systemctl daemon-reload + restart.
+# PRD-019: per-field BM25 (BM25F). Off by default. Flip to 1 once the
+# index has been rebuilt with the new zet binary (setup.sh handles
+# this — sidecars index.field_lengths and index.field_stats live next
+# to the index and are auto-discovered via ZET_INDEX).
 Environment=ZET_PERFIELD_BM25=0
-Environment=ZET_FIELD_LENGTHS_PATH=/mnt/wikipedia-source/field_lengths.bin
-Environment=ZET_FIELD_STATS_PATH=/mnt/wikipedia-source/field_stats.bin
 Environment=ZET_FIELD_W_BODY=1.0
 # b=0 disables length normalisation on body, matching the legacy --b=0.0
-# we pass to zet for the per-occurrence path. Without this, PRD-019
-# heavily favours short stubs (e.g. Helena Morrissey, 59-word body) over
-# longer canonical articles (e.g. Morrissey-the-singer, 279 words).
+# we pass to zet for the per-occurrence path.
 Environment=ZET_FIELD_B_BODY=0.0
 Environment=ZET_FIELD_W_TITLE=5.0
 # b=1 means full length norm on title — a 1-word title fully covered by

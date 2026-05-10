@@ -6,6 +6,11 @@
 #
 #   sudo bash deploy/setup.sh
 #
+# This is the ONLY command anyone should ever run on the box. It is fully
+# idempotent: re-running it after any change (new corpus, new clickstream,
+# new C source) detects what is stale and rebuilds only that. Never run
+# the python pipeline scripts manually.
+#
 # Permission model:
 #   - deploy owns both repos (/opt/zettair-search, /opt/zettair). git pull,
 #     pipeline scripts, and the zet build all run as deploy.
@@ -15,7 +20,9 @@
 #   - root only does what genuinely needs root: apt, useradd, /etc/systemd
 #     writes, systemctl, the initial chown to set ownership on volume + repos.
 #
-# Every step is guarded by an existence check — safe to re-run after failure.
+# Staleness model: each derived artefact is rebuilt when any of its inputs
+# is newer (mtime check via `is_stale`). No "skip if exists" — that has
+# bitten us before with click_prior.bin going out of sync with the index.
 
 set -euo pipefail
 
@@ -51,6 +58,21 @@ BZ2_FILE="$VOLUME/enwiki-latest-pages-articles.xml.bz2"
 TITLES_FILE="$VOLUME/top_titles.txt"
 TREC_FILE="$VOLUME/enwiki_top1m.trec"
 INDEX_DIR="$VOLUME/wikiindex"
+INDEX_PREFIX="$INDEX_DIR/index"
+
+# Indexer-emitted sidecars. Aligned with the index by construction —
+# zet writes them in the same loop that assigns docids.
+INDEX_PARAM="${INDEX_PREFIX}.param.0"
+INDEX_FIELD_LENGTHS="${INDEX_PREFIX}.field_lengths"
+INDEX_FIELD_STATS="${INDEX_PREFIX}.field_stats"
+INDEX_DOCNO_MAP="${INDEX_PREFIX}.docno_map.tsv"
+INDEX_CLICK_PRIOR="${INDEX_PREFIX}.click_prior.bin"
+
+DOCSTORE="$VOLUME/enwiki_top1m.docstore"
+DOCMAP="$VOLUME/enwiki_top1m.docmap"
+AUTOSUGGEST="$VOLUME/autosuggest.json"
+URLS_STORE="$VOLUME/enwiki_top1m_urls.store"
+URLS_MAP="$VOLUME/enwiki_top1m_urls.map"
 
 ### ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -63,27 +85,70 @@ as_deploy() { sudo -u "$DEPLOY_USER" "$@"; }
 # Run a command as the zettair (service) user. Volume writes use this.
 as_zettair() { sudo -u "$SERVICE_USER" "$@"; }
 
-### ── 1. System dependencies (root) ─────────────────────────────────────────
+# is_stale OUTPUT INPUT [INPUT...]
+# Returns 0 (stale, needs rebuild) if OUTPUT is missing OR any INPUT is
+# newer than OUTPUT. Returns 1 (fresh) otherwise.
+# Inputs that don't exist are silently skipped (so optional inputs work).
+is_stale() {
+    local out="$1"; shift
+    [ -e "$out" ] || return 0
+    local in
+    for in in "$@"; do
+        [ -e "$in" ] || continue
+        if [ "$in" -nt "$out" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
 
-log "Installing system packages..."
-apt-get update -qq
-apt-get install -y -qq \
-    python3 python3-pip python3-venv \
-    git gcc make autoconf automake libtool pkg-config \
-    libz-dev curl wget
+# is_stale_dir OUTPUT INPUT_GLOB
+# Like is_stale, but INPUT_GLOB is shell-expanded. Useful for "any
+# clickstream file is newer than click_prior".
+is_stale_glob() {
+    local out="$1"; shift
+    [ -e "$out" ] || return 0
+    local in
+    for in in "$@"; do
+        # ignore literal globs that didn't match anything
+        [ -e "$in" ] || continue
+        if [ "$in" -nt "$out" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
 
-pip3 install --quiet --break-system-packages fastapi uvicorn
+### ── 1. System dependencies (root) — skipped on subsequent runs ────────────
+#
+# A marker file says "this box is provisioned" so re-runs (e.g. from
+# deploy.sh) skip the slow apt-get/useradd path. Bumps to packages or
+# user setup require deleting /etc/zettair-setup-done before re-running.
 
-### ── 2. Create users (root) ─────────────────────────────────────────────────
+SETUP_MARKER=/etc/zettair-setup-done
+if [ ! -f "$SETUP_MARKER" ]; then
+    log "Installing system packages (first run)..."
+    apt-get update -qq
+    apt-get install -y -qq \
+        python3 python3-pip python3-venv \
+        git gcc make autoconf automake libtool pkg-config \
+        libz-dev curl wget
 
-log "Creating users..."
-if ! id "$DEPLOY_USER" &>/dev/null; then
-    useradd --create-home --shell /bin/bash "$DEPLOY_USER"
-    log "  Created $DEPLOY_USER"
-fi
-if ! id "$SERVICE_USER" &>/dev/null; then
-    useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
-    log "  Created $SERVICE_USER"
+    pip3 install --quiet --break-system-packages fastapi uvicorn
+
+    log "Creating users..."
+    if ! id "$DEPLOY_USER" &>/dev/null; then
+        useradd --create-home --shell /bin/bash "$DEPLOY_USER"
+        log "  Created $DEPLOY_USER"
+    fi
+    if ! id "$SERVICE_USER" &>/dev/null; then
+        useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
+        log "  Created $SERVICE_USER"
+    fi
+
+    touch "$SETUP_MARKER"
+else
+    log "System provisioned ($SETUP_MARKER exists) — skipping apt/useradd."
 fi
 
 ### ── 3. Verify volume mount and set ownership upfront (root) ────────────────
@@ -96,20 +161,34 @@ log "Volume $VOLUME present."
 chown "$SERVICE_USER:$SERVICE_USER" "$VOLUME"
 chmod 750 "$VOLUME"
 
-### ── 4. Clone repos (deploy) ───────────────────────────────────────────────
+### ── 4. Clone/update repos (deploy) ─────────────────────────────────────────
 
-log "Cloning repos..."
-# Make sure the install dir is traversable by deploy if it isn't already.
+log "Cloning/updating repos..."
 mkdir -p "$INSTALL_DIR"
-
-# If repos exist, fix ownership in case a previous run created them as root.
-# If repos don't exist, parent must be writable by deploy for the clone.
 chown -R "$DEPLOY_USER:$DEPLOY_USER" "$INSTALL_DIR" 2>/dev/null || true
-[ -d "$SEARCH_DIR" ] || as_deploy git clone "$ZETTAIR_SEARCH_REPO" "$SEARCH_DIR"
-[ -d "$ZETTAIR_DIR" ] || as_deploy git clone "$ZETTAIR_REPO" "$ZETTAIR_DIR"
+
+if [ -d "$SEARCH_DIR" ]; then
+    as_deploy bash -c "cd '$SEARCH_DIR' && git pull origin main"
+else
+    as_deploy git clone "$ZETTAIR_SEARCH_REPO" "$SEARCH_DIR"
+fi
+
+# requirements.txt may have new entries between deploys; pip is idempotent
+# so this is a fast no-op when nothing changed.
+if [ -f "$SEARCH_DIR/requirements.txt" ]; then
+    pip3 install --quiet --break-system-packages -r "$SEARCH_DIR/requirements.txt"
+fi
+
+ZETTAIR_OLD_HEAD=""
+if [ -d "$ZETTAIR_DIR" ]; then
+    ZETTAIR_OLD_HEAD=$(as_deploy git -C "$ZETTAIR_DIR" rev-parse HEAD 2>/dev/null || true)
+    as_deploy bash -c "cd '$ZETTAIR_DIR' && git pull origin main"
+else
+    as_deploy git clone "$ZETTAIR_REPO" "$ZETTAIR_DIR"
+fi
+ZETTAIR_NEW_HEAD=$(as_deploy git -C "$ZETTAIR_DIR" rev-parse HEAD)
 
 # World-readable so the zettair service user can read server.py and the zet binary
-# without owning these directories. (deploy still owns; zettair just reads.)
 chown -R "$DEPLOY_USER:$DEPLOY_USER" "$SEARCH_DIR" "$ZETTAIR_DIR"
 chmod -R o+rX "$SEARCH_DIR" "$ZETTAIR_DIR"
 
@@ -125,21 +204,24 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$SEARCH_DIR/logs"
 # We replace the wrapper with the real binary from .libs/ and make the
 # shared library globally findable so zet runs regardless of CWD or invoker.
 
-# Always re-check: $ZET_BIN may exist as the libtool wrapper from a previous run.
 NEEDS_BUILD=1
-if [ -f "$ZET_BIN" ] && file "$ZET_BIN" | grep -q ELF; then
+if [ -f "$ZET_BIN" ] && file "$ZET_BIN" | grep -q ELF \
+   && [ "$ZETTAIR_OLD_HEAD" = "$ZETTAIR_NEW_HEAD" ]; then
     NEEDS_BUILD=0
 fi
 
 if [ "$NEEDS_BUILD" = "1" ]; then
-    log "Building Zettair..."
+    log "Building Zettair (HEAD: ${ZETTAIR_OLD_HEAD:-<fresh>} -> $ZETTAIR_NEW_HEAD)..."
     ARCH=$(uname -m)
     if [ "$ARCH" = "aarch64" ]; then
         BUILD_FLAG="--build=aarch64-unknown-linux-gnu"
     else
         BUILD_FLAG=""
     fi
-    as_deploy bash -c "cd '$ZETTAIR_DIR/devel' && ./configure $BUILD_FLAG && make -j$(nproc)"
+    if [ ! -f "$ZETTAIR_DIR/devel/Makefile" ]; then
+        as_deploy bash -c "cd '$ZETTAIR_DIR/devel' && ./configure $BUILD_FLAG"
+    fi
+    as_deploy bash -c "cd '$ZETTAIR_DIR/devel' && make -j$(nproc)"
 
     # Replace the libtool wrapper with the real ELF binary.
     if [ -f "$ZETTAIR_DIR/devel/.libs/zet" ]; then
@@ -155,8 +237,12 @@ if [ "$NEEDS_BUILD" = "1" ]; then
     fi
 
     log "Binary installed at: $ZET_BIN"
+    # If zet rebuilt, the index might be stale wrt new on-disk format,
+    # but for now we trust the format hasn't changed unless the param
+    # file is missing. Force a reindex by deleting the index dir if you
+    # actually need a format-change rebuild.
 else
-    log "Zettair binary already built (real ELF) — skipping."
+    log "Zettair binary up to date — skipping."
 fi
 
 ### ── 6. Download enwiki bz2 dump (zettair, to volume) ──────────────────────
@@ -222,103 +308,100 @@ if [ -f "$BZ2_FILE" ]; then
     fi
 fi
 
-### ── 11. Pipeline: docno map, click prior, autosuggest, docstore, urls ─────
+### ── 11. Build Zettair index (zettair, to volume) ──────────────────────────
+#
+# zet -i emits the index AND three sidecars in one pass, all aligned with
+# the docid space because they're written in the same loop:
+#   index.field_lengths   — per-doc per-field word counts (PRD-019)
+#   index.field_stats     — per-field corpus averages (PRD-019)
+#   index.docno_map.tsv   — docid -> docno mapping (Phase 2)
+# Stale if TREC is newer than the index param file or any sidecar is missing.
 
-log "Building docno map..."
-if [ ! -f "$WIKI_DIR/docno_map.tsv" ]; then
-    # build_docno_map.py writes docno_map.tsv into its own directory
-    as_deploy python3 "$WIKI_DIR/build_docno_map.py" "$TREC_FILE"
+if is_stale "$INDEX_PARAM" "$TREC_FILE" \
+   || [ ! -f "$INDEX_FIELD_LENGTHS" ] \
+   || [ ! -f "$INDEX_FIELD_STATS" ] \
+   || [ ! -f "$INDEX_DOCNO_MAP" ]; then
+    log "Building Zettair index (~10 min for 1.5M articles)..."
+    as_zettair mkdir -p "$INDEX_DIR"
+    # Wipe any partial index from a previous failed run; otherwise zet -i
+    # may refuse to create a fresh index over an existing one.
+    as_zettair bash -c "rm -f '$INDEX_DIR'/index.* '$INDEX_DIR'/*.tsv"
+    as_zettair "$ZET_BIN" -i -f "$INDEX_PREFIX" "$TREC_FILE"
+    log "Index built at $INDEX_DIR with sidecars."
 else
-    log "  docno_map.tsv already exists — skipping."
+    log "Index up to date — skipping."
 fi
 
-log "Extracting titles for autosuggest..."
-if [ ! -f "$WIKI_DIR/enwiki_titles.txt" ]; then
-    as_deploy bash -c "cut -f2 '$WIKI_DIR/docno_map.tsv' > '$WIKI_DIR/enwiki_titles.txt'"
-fi
+### ── 12. Build click_prior.bin (zettair, to index dir) ─────────────────────
+#
+# Aligned with the live index docid space via index.docno_map.tsv emitted
+# by zet itself. Stale if any clickstream file or the docno_map is newer
+# than click_prior.bin.
 
-log "Building click prior..."
-if [ ! -f "$VOLUME/click_prior.bin" ]; then
-    # build_click_prior.py uses HERE-relative paths — must run with WIKI_DIR as CWD
-    as_deploy bash -c "cd '$WIKI_DIR' && python3 build_click_prior.py"
-    # Copy into the volume as zettair so the volume copy has correct ownership
-    as_zettair cp "$WIKI_DIR/click_prior.bin" "$VOLUME/click_prior.bin"
-    log "  click_prior.bin copied to $VOLUME"
+if is_stale "$INDEX_CLICK_PRIOR" "$INDEX_DOCNO_MAP" \
+   || is_stale_glob "$INDEX_CLICK_PRIOR" "$WIKI_DIR"/clickstream-enwiki-*.tsv.gz; then
+    log "Building click prior from $INDEX_DOCNO_MAP..."
+    # Need clickstream files alongside the script (build_click_prior.py
+    # globs its own dir). Logs land in the wiki-dir-relative logs/ dir
+    # (env-overridable) — make it writable by zettair.
+    as_zettair mkdir -p "$WIKI_DIR/logs"
+    as_zettair bash -c "cd '$WIKI_DIR' && python3 build_click_prior.py --index '$INDEX_PREFIX'"
+    log "click_prior.bin written to $INDEX_CLICK_PRIOR"
 else
-    log "  click_prior.bin already exists — skipping."
+    log "click_prior.bin up to date — skipping."
 fi
 
-log "Building autosuggest index..."
-if [ ! -f "$VOLUME/autosuggest.json" ]; then
-    as_deploy bash -c "cd '$WIKI_DIR' && python3 build_autosuggest.py"
-    as_zettair cp "$WIKI_DIR/autosuggest.json" "$VOLUME/autosuggest.json"
-    log "  autosuggest.json copied to $VOLUME"
+### ── 13. Build autosuggest (zettair, to volume) ────────────────────────────
+#
+# Stale if any clickstream file is newer than autosuggest.json.
+
+if is_stale_glob "$AUTOSUGGEST" "$WIKI_DIR"/clickstream-enwiki-*.tsv.gz; then
+    log "Building autosuggest index..."
+    as_zettair bash -c "cd '$WIKI_DIR' && python3 build_autosuggest.py"
+    as_zettair cp "$WIKI_DIR/autosuggest.json" "$AUTOSUGGEST"
+    log "autosuggest.json copied to $VOLUME"
 else
-    log "  autosuggest.json already exists — skipping."
+    log "autosuggest.json up to date — skipping."
 fi
 
-log "Building docstore..."
-if [ ! -f "$VOLUME/enwiki_top1m.docstore" ]; then
-    # build_docstore.py derives output paths from the TREC path → writes to volume directly
+### ── 14. Build docstore (zettair, to volume) ────────────────────────────────
+#
+# Stale if TREC is newer than the docstore.
+
+if is_stale "$DOCSTORE" "$TREC_FILE"; then
+    log "Building docstore..."
     as_zettair python3 "$WIKI_DIR/build_docstore.py" "$TREC_FILE"
-    log "  docstore written alongside TREC on $VOLUME"
+    log "docstore written to $DOCSTORE"
 else
-    log "  enwiki_top1m.docstore already exists — skipping."
+    log "docstore up to date — skipping."
 fi
 
-log "Building URLs store..."
-URLS_STORE="$VOLUME/enwiki_top1m_urls.store"
-URLS_MAP="$VOLUME/enwiki_top1m_urls.map"
+### ── 15. Build URLs store if missing (zettair, to volume) ──────────────────
+# wiki2trec.py writes the URL store natively for fresh builds (PRD-015).
+# This step is a fallback for indexes that pre-date that — bootstrap from
+# a dbkeys.tsv file if one exists.
+
 if [ ! -f "$URLS_STORE" ]; then
-    # wiki2trec.py writes the urls store natively for fresh builds.
-    # If it's missing here (e.g. the index pre-dates PRD-015), bootstrap from
-    # a dbkeys.tsv file if one is present.
     DBKEYS_FILE="$VOLUME/enwiki_top1m.dbkeys.tsv"
     if [ -f "$DBKEYS_FILE" ]; then
+        log "Bootstrapping URLs store from dbkeys.tsv..."
         as_zettair python3 "$WIKI_DIR/build_urls_store.py" \
             "$DBKEYS_FILE" "$URLS_STORE" "$URLS_MAP"
     else
-        log "  WARNING: no urls store and no dbkeys.tsv to bootstrap from — punctuation links will 404"
+        log "WARNING: no urls store and no dbkeys.tsv to bootstrap from — punctuation links will 404"
     fi
 else
-    log "  enwiki_top1m_urls.store already exists — skipping."
+    log "URLs store present."
 fi
 
-### ── 12. Build Zettair index (zettair, to volume) ──────────────────────────
-
-if [ ! -f "$INDEX_DIR/index.param.0" ]; then
-    log "Building Zettair index (can take 30-60 min for 1M articles)..."
-    as_zettair mkdir -p "$INDEX_DIR"
-    as_zettair "$ZET_BIN" -i -f "$INDEX_DIR/index" "$TREC_FILE"
-    log "Index built at $INDEX_DIR"
-else
-    log "Index already exists at $INDEX_DIR — skipping."
-fi
-
-### ── 12a. PRD-019 sidecars: per-doc field lengths + per-field corpus stats ─
-
-# Generated unconditionally so flipping ZET_PERFIELD_BM25=1 in the systemd
-# unit is the only thing needed to opt in. The sidecars are docno-aligned
-# with the TREC file (and therefore with the index built from it), so they
-# must be rebuilt whenever the TREC is regenerated.
-FIELD_LENGTHS="$VOLUME/field_lengths.bin"
-FIELD_STATS="$VOLUME/field_stats.bin"
-if [ ! -f "$FIELD_LENGTHS" ] || [ ! -f "$FIELD_STATS" ]; then
-    log "Building PRD-019 per-field sidecars..."
-    as_zettair bash -c "cd '$VOLUME' && python3 '$WIKI_DIR/build_field_lengths.py' '$TREC_FILE'"
-    log "Wrote $FIELD_LENGTHS and $FIELD_STATS"
-else
-    log "PRD-019 sidecars already present — skipping."
-fi
-
-### ── 13. Install systemd service (root) ────────────────────────────────────
+### ── 16. Install systemd service (root) — always rsync the unit file ───────
 
 log "Installing systemd service..."
 cp "$SEARCH_DIR/deploy/zettair-search.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable zettair-search
 
-### ── 14. Verify ownership (loud failure if anything is misowned) ───────────
+### ── 17. Verify ownership (loud failure if anything is misowned) ───────────
 
 log "Verifying ownership..."
 ROOT_FILES_VOLUME=$(find "$VOLUME" -mindepth 1 -user root -not -path '*/lost+found*' 2>/dev/null | head -5)
@@ -334,21 +417,27 @@ else
     log "  All ownership correct — volume:$SERVICE_USER, repos:$DEPLOY_USER, logs/:$SERVICE_USER."
 fi
 
+### ── 18. Restart service ───────────────────────────────────────────────────
+
+log "Restarting zettair-search..."
+systemctl restart zettair-search
+sleep 3
+if curl -sf --max-time 5 "http://localhost:8765/search?q=test&n=1" > /dev/null; then
+    log "  Service is up and responding."
+else
+    log "  WARNING: health check failed — see: journalctl -u zettair-search -n 50"
+fi
+
 ### ── Done ───────────────────────────────────────────────────────────────────
 
 log ""
 log "═══════════════════════════════════════════════════════"
-log "  Setup complete!"
+log "  Setup complete."
 log ""
-log "  Cutover checklist:"
-log "  1. Verify artifacts:"
-log "       sudo -u $SERVICE_USER ls -lh $INDEX_DIR/index.param.0"
-log "       sudo -u $SERVICE_USER ls -lh $VOLUME/enwiki_top1m.docstore"
-log "       sudo -u $SERVICE_USER ls -lh $VOLUME/enwiki_top1m_snippets.store"
-log "  2. Smoke-test the index:"
-log "       sudo -u $SERVICE_USER $ZET_BIN -f $INDEX_DIR/index --summary=plain --output=json -n 3 <<< 'einstein'"
-log "  3. Restart the service:"
-log "       sudo systemctl restart zettair-search"
-log "       sudo systemctl status zettair-search"
-log "       curl 'http://localhost:8765/search?q=einstein'"
+log "  Re-run this script any time:"
+log "    - C source changed                  -> rebuilds zet, may force reindex"
+log "    - new clickstream file dropped in   -> rebuilds click prior + autosuggest"
+log "    - corpus refreshed (new TREC)       -> rebuilds index + all sidecars"
+log "    - nothing changed                   -> skips everything, restarts service"
+log "  Each artefact is rebuilt only when its inputs are newer."
 log "═══════════════════════════════════════════════════════"
