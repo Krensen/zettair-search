@@ -44,7 +44,7 @@ ZET_BOOST_CAPTION  = os.environ.get("ZET_BOOST_CAPTION",  "1.0")
 ZET_BOOST_CATEGORY = os.environ.get("ZET_BOOST_CATEGORY", "1.0")
 ZET_BOOST_SEEALSO  = os.environ.get("ZET_BOOST_SEEALSO",  "1.0")
 ZET_BOOST_INFOBOX  = os.environ.get("ZET_BOOST_INFOBOX",  "1.0")
-ZET_WORKERS      = int(os.environ.get("ZET_WORKERS", "2"))
+ZET_WORKERS      = int(os.environ.get("ZET_WORKERS", "4"))
 ZET_QUERY_TIMEOUT = float(os.environ.get("ZET_QUERY_TIMEOUT", "5.0"))
 
 _wiki_dir = os.path.join(os.path.dirname(__file__), "../zettair/wikipedia")
@@ -248,9 +248,13 @@ class ZetPool:
             "-n", "100",   # max results per query; Python slices to requested n
         ]
 
-        for i in range(size):
-            w = await self._spawn(i)
-            self._workers.append(w)
+        # Spawn workers concurrently. Each worker independently mmaps the
+        # index, click prior, and field-lengths sidecar at startup, so
+        # serial spawn made startup cost (sidecars × workers) when it
+        # only had to be (sidecars × 1) walltime.
+        self._workers = list(await asyncio.gather(
+            *(self._spawn(i) for i in range(size))
+        ))
 
         print(f"[zet_pool] started {size} workers", flush=True)
 
