@@ -26,6 +26,18 @@ Environment=ZET_AUTOSUGGEST=/mnt/wikipedia-source/autosuggest.json
 Environment=ZET_DOCSTORE=/mnt/wikipedia-source/enwiki_top1m.docstore
 Environment=ZET_DOCMAP=/mnt/wikipedia-source/enwiki_top1m.docmap
 
+# PRD-019: per-field BM25 (BM25F). Off by default — flip ZET_PERFIELD_BM25
+# to 1 to enable. Sidecars built by setup.sh / build_field_lengths.py.
+# Per-field weights and length-norm parameters can be tuned without restart
+# by editing this file and running systemctl daemon-reload + restart.
+Environment=ZET_PERFIELD_BM25=0
+Environment=ZET_FIELD_LENGTHS_PATH=/mnt/wikipedia-source/field_lengths.bin
+Environment=ZET_FIELD_STATS_PATH=/mnt/wikipedia-source/field_stats.bin
+Environment=ZET_FIELD_W_BODY=1.0
+Environment=ZET_FIELD_B_BODY=0.75
+Environment=ZET_FIELD_W_TITLE=5.0
+Environment=ZET_FIELD_B_TITLE=1.0
+
 ExecStart=/usr/bin/python3 server.py
 Restart=always
 RestartSec=5

@@ -295,6 +295,22 @@ else
     log "Index already exists at $INDEX_DIR — skipping."
 fi
 
+### ── 12a. PRD-019 sidecars: per-doc field lengths + per-field corpus stats ─
+
+# Generated unconditionally so flipping ZET_PERFIELD_BM25=1 in the systemd
+# unit is the only thing needed to opt in. The sidecars are docno-aligned
+# with the TREC file (and therefore with the index built from it), so they
+# must be rebuilt whenever the TREC is regenerated.
+FIELD_LENGTHS="$VOLUME/field_lengths.bin"
+FIELD_STATS="$VOLUME/field_stats.bin"
+if [ ! -f "$FIELD_LENGTHS" ] || [ ! -f "$FIELD_STATS" ]; then
+    log "Building PRD-019 per-field sidecars..."
+    as_zettair bash -c "cd '$VOLUME' && python3 '$WIKI_DIR/build_field_lengths.py' '$TREC_FILE'"
+    log "Wrote $FIELD_LENGTHS and $FIELD_STATS"
+else
+    log "PRD-019 sidecars already present — skipping."
+fi
+
 ### ── 13. Install systemd service (root) ────────────────────────────────────
 
 log "Installing systemd service..."
