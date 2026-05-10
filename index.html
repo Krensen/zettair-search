@@ -272,6 +272,158 @@
       line-height: 1.6;
     }
 
+    /* PRD-018: knowledge-panel summary styling. The summary appears
+       after the result list paints. Skeleton lines shimmer left-to-right
+       while loading, then the real content slides up + fades in with a
+       staggered line-by-line reveal — feels like the answer is being
+       composed rather than dropped in. */
+
+    /* Bigger slide distance (16px), longer + cubic-bezier easing so the
+       motion has personality. Filter blur smooths the entrance. */
+    @keyframes kp-summary-in {
+      0%   { opacity: 0; transform: translateY(16px); filter: blur(4px); }
+      60%  { opacity: 1;                              filter: blur(0); }
+      100% { opacity: 1; transform: translateY(0);    filter: blur(0); }
+    }
+    /* Shorter, snappier slide for each child element so individual
+       paragraphs/bullets cascade in. */
+    @keyframes kp-line-in {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    /* Wider shimmer travel + faster sweep makes the loading state feel
+       visibly busy. */
+    @keyframes kp-shimmer {
+      0%   { background-position: -600px 0; }
+      100% { background-position:  600px 0; }
+    }
+    /* Skeleton lines come in staggered too so it doesn't feel like a
+       static block. */
+    @keyframes kp-skeleton-in {
+      from { opacity: 0; transform: translateX(-12px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+    /* Pulse for the dot in the SUMMARY badge — independent rhythm
+       from the shimmer so the badge keeps the "alive" feel after the
+       summary has loaded. */
+    @keyframes kp-pulse {
+      0%, 100% { opacity: 0.6; transform: scale(1); }
+      50%      { opacity: 1;   transform: scale(1.3); }
+    }
+
+    /* The panel itself gets an accent border on the left when a summary
+       is present, distinguishing it from the plain-top-result variant. */
+    .knowledge-panel.has-summary {
+      border-left: 3px solid #1a73e8;
+      box-shadow: 0 1px 3px rgba(60,64,67,0.08), 0 4px 14px rgba(60,64,67,0.08);
+    }
+
+    .kp-summary-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.65rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: #1a73e8;
+      background: #e8f0fe;
+      padding: 3px 10px 3px 9px;
+      border-radius: 999px;
+      margin-bottom: 0.6rem;
+    }
+    .kp-summary-badge::before {
+      content: "";
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: #1a73e8;
+      animation: kp-pulse 1.4s ease-in-out infinite;
+    }
+
+    .kp-summary {
+      font-size: 0.9rem;
+      color: #202124;
+      line-height: 1.55;
+      animation: kp-summary-in 700ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+    }
+    /* Stagger child elements: each direct child slides in slightly after
+       the previous one. Caps at 6 so a long list doesn't drag forever. */
+    .kp-summary > * {
+      animation: kp-line-in 420ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+    }
+    .kp-summary > *:nth-child(1) { animation-delay: 80ms; }
+    .kp-summary > *:nth-child(2) { animation-delay: 180ms; }
+    .kp-summary > *:nth-child(3) { animation-delay: 280ms; }
+    .kp-summary > *:nth-child(4) { animation-delay: 380ms; }
+    .kp-summary > *:nth-child(5) { animation-delay: 460ms; }
+    .kp-summary > *:nth-child(n+6) { animation-delay: 540ms; }
+    /* Bullet items inside <ul> get their own staircase */
+    .kp-summary ul li {
+      animation: kp-line-in 360ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+    }
+    .kp-summary ul li:nth-child(1) { animation-delay: 320ms; }
+    .kp-summary ul li:nth-child(2) { animation-delay: 420ms; }
+    .kp-summary ul li:nth-child(3) { animation-delay: 520ms; }
+    .kp-summary ul li:nth-child(4) { animation-delay: 620ms; }
+    .kp-summary ul li:nth-child(5) { animation-delay: 720ms; }
+    .kp-summary ul li:nth-child(n+6) { animation-delay: 820ms; }
+
+    .kp-summary p { margin: 0 0 0.5rem; color: inherit; font-size: inherit; }
+    .kp-summary p:last-child { margin-bottom: 0; }
+    .kp-summary ul {
+      margin: 0.4rem 0 0.5rem;
+      padding-left: 1.2rem;
+    }
+    .kp-summary li { margin: 0.15rem 0; }
+    .kp-summary strong { color: #202124; font-weight: 600; }
+
+    /* Skeleton placeholder shown while the summary loads in. Four
+       fake lines that shimmer left-to-right and cascade in from the
+       left so the loading state is visibly animated, not just flashing. */
+    .kp-skeleton {
+      animation: kp-summary-in 240ms ease-out both;
+    }
+    .kp-skeleton .line {
+      height: 0.7rem;
+      margin: 0.55rem 0;
+      border-radius: 4px;
+      background-image: linear-gradient(
+        90deg,
+        #eef0f3 0%,
+        #ffffff 35%,
+        #dee3eb 50%,
+        #ffffff 65%,
+        #eef0f3 100%
+      );
+      background-size: 1200px 100%;
+      animation: kp-shimmer 1.1s linear infinite,
+                 kp-skeleton-in 320ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+    }
+    .kp-skeleton .line:nth-child(1) { animation-delay: 0ms,    60ms; }
+    .kp-skeleton .line:nth-child(2) { animation-delay: 100ms, 140ms; }
+    .kp-skeleton .line:nth-child(3) { animation-delay: 200ms, 220ms; }
+    .kp-skeleton .line:nth-child(4) { animation-delay: 300ms, 300ms; }
+    .kp-skeleton .line.w80 { width: 80%; }
+    .kp-skeleton .line.w95 { width: 95%; }
+    .kp-skeleton .line.w65 { width: 65%; }
+    .kp-skeleton .line.w40 { width: 40%; }
+
+    /* Respect users who prefer reduced motion — collapse to fast fades only. */
+    @media (prefers-reduced-motion: reduce) {
+      .kp-summary,
+      .kp-summary > *,
+      .kp-summary ul li,
+      .kp-skeleton,
+      .kp-skeleton .line,
+      .kp-summary-badge::before {
+        animation-duration: 200ms !important;
+        animation-delay: 0ms !important;
+        animation-iteration-count: 1 !important;
+        transform: none !important;
+        filter: none !important;
+      }
+    }
+
     /* ── RESULT ITEMS ── */
     .result-item {
       margin-bottom: 2rem;
@@ -572,6 +724,10 @@
       // Knowledge panel — top result, with image when one is available.
       // If the image fails to load, hide just the <img> rather than the whole
       // panel: the text content is still useful even without a picture.
+      // When PRD-018 provides a generated summary for this query, render a
+      // shimmer skeleton first and fade the real summary in after the
+      // results have had a moment to paint — gives the page a Google-like
+      // "answer is composing" feel.
       const top = data.results[0];
       const title = formatTitle(top.docno);
       const wikiUrl = wikiLink(top);
@@ -579,8 +735,21 @@
         ? `<img src="${esc(proxyImg(top.image_url))}" alt="${esc(title)}"
                 onerror="this.style.display='none'">`
         : '';
+      const hasSummary = typeof data.summary === 'string' && data.summary.trim().length > 0;
+      const skeletonHtml = `
+        <div class="kp-summary-badge">Summary</div>
+        <div class="kp-skeleton" id="kpSkeleton" aria-busy="true" aria-label="Generating summary">
+          <div class="line w95"></div>
+          <div class="line w95"></div>
+          <div class="line w80"></div>
+          <div class="line w65"></div>
+          <div class="line w40"></div>
+        </div>`;
+      const initialBody = hasSummary
+        ? skeletonHtml
+        : `<p>${highlightQuery(top.snippet || '', q)}</p>`;
       knowledgePanel.innerHTML = `
-        <div class="knowledge-panel">
+        <div class="knowledge-panel${hasSummary ? ' has-summary' : ''}">
           ${imgHtml}
           <div class="knowledge-panel-text">
             <a class="kp-title" href="${esc(wikiUrl)}" target="_blank" rel="noopener noreferrer"
@@ -590,9 +759,33 @@
               <img src="https://www.google.com/s2/favicons?domain=en.wikipedia.org&sz=32" alt="">
               <span>Wikipedia · en.wikipedia.org</span>
             </div>
-            <p>${highlightQuery(top.snippet || '', q)}</p>
+            <div id="kpBody">${initialBody}</div>
           </div>
         </div>`;
+
+      // Replace skeleton with the rendered summary AFTER the result list has
+      // had a chance to paint. requestAnimationFrame + a short timeout makes
+      // the load feel deliberate rather than instant. Use the most recent
+      // summary captured at this call time, so a fast-following second
+      // search doesn't show the wrong content.
+      if (hasSummary) {
+        const renderedSummary = renderMarkdown(data.summary);
+        const bodyEl = document.getElementById('kpBody');
+        const queryAtRequestTime = q;
+        // Hold the skeleton long enough for the shimmer to make a couple
+        // of passes — feels more like an answer is being composed.
+        // double rAF so we wait for at least one full paint
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          setTimeout(() => {
+            // bail if the user fired another search in the meantime
+            if (resultsQuery.value !== queryAtRequestTime) return;
+            if (!bodyEl || !bodyEl.isConnected) return;
+            bodyEl.innerHTML =
+              '<div class="kp-summary-badge">Summary</div>' +
+              '<div class="kp-summary">' + renderedSummary + '</div>';
+          }, 900);
+        }));
+      }
 
       // Results
       resultsList.innerHTML = data.results.map(r => {
@@ -765,6 +958,55 @@
       body: JSON.stringify({q, docno, rank, score}),
       keepalive: true,   // survives page navigation
     }).catch(() => {});
+  }
+
+  // PRD-018: tiny markdown renderer for knowledge-panel summaries.
+  // Supports paragraphs, **bold**, and `-`/`*` bullet lists. Anything
+  // else is rendered as escaped plain text. We avoid a full markdown
+  // lib because the summary format is small and well-defined, and we
+  // want HTML-safe output by construction.
+  function renderMarkdown(md) {
+    if (!md) return '';
+    const lines = String(md).split(/\r?\n/);
+    const html = [];
+    let para = [];
+    let inList = false;
+
+    const flushPara = () => {
+      if (para.length) {
+        html.push('<p>' + applyInline(para.join(' ')) + '</p>');
+        para = [];
+      }
+    };
+    const flushList = () => {
+      if (inList) { html.push('</ul>'); inList = false; }
+    };
+    const applyInline = s => {
+      // Escape first, then replace **bold** patterns with <strong>.
+      const escaped = esc(s);
+      return escaped.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+    };
+
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line) {
+        flushPara();
+        flushList();
+        continue;
+      }
+      const bullet = line.match(/^[-*]\s+(.+)$/);
+      if (bullet) {
+        flushPara();
+        if (!inList) { html.push('<ul>'); inList = true; }
+        html.push('<li>' + applyInline(bullet[1]) + '</li>');
+      } else {
+        flushList();
+        para.push(line);
+      }
+    }
+    flushPara();
+    flushList();
+    return html.join('');
   }
 
   const proxyImg = url => url ? `/img?url=${encodeURIComponent(url)}` : null;

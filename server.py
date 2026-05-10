@@ -99,6 +99,9 @@ URLS_MAP_PATH       = os.environ.get("ZET_URLS_MAP",       os.path.join(_wiki_di
 DOCSTORE_PATH       = os.environ.get("ZET_DOCSTORE",       os.path.join(_wiki_dir, "enwiki.docstore"))
 DOCMAP_PATH         = os.environ.get("ZET_DOCMAP",         os.path.join(_wiki_dir, "enwiki.docmap"))
 AUTOSUGGEST_PATH    = os.environ.get("ZET_AUTOSUGGEST",    os.path.join(_wiki_dir, "autosuggest.json"))
+# PRD-018: knowledge-panel summaries. Keyed by query_norm, generated offline.
+SUMMARIES_STORE_PATH = os.environ.get("ZET_SUMMARIES_STORE", os.path.join(_wiki_dir, "summaries.store"))
+SUMMARIES_MAP_PATH   = os.environ.get("ZET_SUMMARIES_MAP",   os.path.join(_wiki_dir, "summaries.map"))
 
 _autosuggest: list = []   # sorted list of (query, count) tuples
 
@@ -157,9 +160,15 @@ class FlatStore:
         return {d: t for d in docnos if (t := self.get(d)) is not None}
 
 
-_snippets_store = FlatStore(SNIPPETS_STORE_PATH, SNIPPETS_MAP_PATH, "snippets")
-_images_store   = FlatStore(IMAGES_STORE_PATH,   IMAGES_MAP_PATH,   "images")
-_urls_store     = FlatStore(URLS_STORE_PATH,     URLS_MAP_PATH,     "urls")
+_snippets_store  = FlatStore(SNIPPETS_STORE_PATH,  SNIPPETS_MAP_PATH,  "snippets")
+_images_store    = FlatStore(IMAGES_STORE_PATH,    IMAGES_MAP_PATH,    "images")
+_urls_store      = FlatStore(URLS_STORE_PATH,      URLS_MAP_PATH,      "urls")
+_summaries_store = FlatStore(SUMMARIES_STORE_PATH, SUMMARIES_MAP_PATH, "summaries")
+
+# PRD-018: shared normalisation for summary lookups. Same function must
+# be used by the offline summary generator and the live server.
+def query_norm(s: str) -> str:
+    return " ".join(s.lower().strip().split())
 _docstore       = FlatStore(DOCSTORE_PATH,       DOCMAP_PATH,       "docstore")
 
 
@@ -367,6 +376,7 @@ async def lifespan(app: FastAPI):
     _snippets_store.load()
     _images_store.load()
     _urls_store.load()
+    _summaries_store.load()
     _docstore.load()
     await _load_autosuggest()
     await _pool.start(ZET_WORKERS)
@@ -378,6 +388,7 @@ async def lifespan(app: FastAPI):
     _snippets_store.close()
     _images_store.close()
     _urls_store.close()
+    _summaries_store.close()
     _docstore.close()
     await _pool.shutdown()
 
@@ -502,7 +513,11 @@ async def search(
         "local": is_local,
     }))
 
-    return {
+    # PRD-018: knowledge-panel summary. Lookup is keyed by normalised
+    # query (lowercase + collapsed whitespace). Missing → field absent.
+    summary = _summaries_store.get(query_norm(q))
+
+    response = {
         "query": q,
         "total": parsed["total"],
         "took_ms": parsed["took_ms"],
@@ -510,6 +525,9 @@ async def search(
         "enrich": enrich_timing,
         "results": results,
     }
+    if summary:
+        response["summary"] = summary
+    return response
 
 
 class ClickEvent(BaseModel):
