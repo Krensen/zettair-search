@@ -514,15 +514,41 @@
   // });
 
   document.getElementById('logoBack').addEventListener('click', (e) => {
+    showHome();
+    history.pushState({page: 'home'}, '', '/');
+  });
+
+  function showHome() {
     resultsPage.style.display = 'none';
     homePage.style.display = 'flex';
     homeQuery.value = '';
     homeQuery.focus();
+  }
+
+  // Browser back/forward: restore the state encoded in the URL.
+  // ?q=foo  -> results for foo;  no q     -> home page.
+  window.addEventListener('popstate', () => {
+    const params = new URLSearchParams(location.search);
+    const q = params.get('q');
+    if (q) {
+      doSearch(q, /*fromHistory=*/ true);
+    } else {
+      showHome();
+    }
   });
 
-  async function doSearch(q, isInstant = false) {
+  async function doSearch(q, fromHistory = false) {
     if (currentController) currentController.abort();
     currentController = new AbortController();
+
+    // Update the URL so the search is bookmarkable and back/forward-able.
+    // Skip when we're invoked FROM a popstate — pushing again would loop.
+    if (!fromHistory) {
+      const desired = '/?q=' + encodeURIComponent(q);
+      if (location.pathname + location.search !== desired) {
+        history.pushState({page: 'results', q}, '', desired);
+      }
+    }
 
     homePage.style.display = 'none';
     resultsPage.style.display = 'block';
@@ -716,6 +742,20 @@
     document.getElementById('resultsSuggest'),
     document.getElementById('resultsForm')
   );
+
+  // Initial-load: if the URL has ?q=foo, run that search immediately so
+  // permalinks and shared URLs work (and the browser back/forward buttons
+  // can navigate between searches).
+  (function bootstrapFromUrl() {
+    const params = new URLSearchParams(location.search);
+    const q = params.get('q');
+    if (q) {
+      history.replaceState({page: 'results', q}, '', location.href);
+      doSearch(q, /*fromHistory=*/ true);
+    } else {
+      history.replaceState({page: 'home'}, '', location.href);
+    }
+  })();
 
   function logClick(q, docno, rank, score) {
     // Fire-and-forget — don't block navigation
