@@ -10,7 +10,8 @@ Live at: **https://zettair.io**
 
 A production search engine built on [Zettair](https://github.com/rmit-ir/zettair), a research-grade BM25 engine from RMIT. The interesting parts are the layer on top of it:
 
-- **Field-weighted BM25** — title term occurrences contribute more to the score than body occurrences via a 4-bit field-id encoded in each posting offset. Tunable per-field via env vars (`ZET_BOOST_TITLE` etc). Generalises to up to 16 fields without a format change. (PRD-019 generalises this further to per-field BM25 with separate length normalisation per field — design only at the moment, not yet wired up.)
+- **Per-field BM25 (PRD-019, live)** — proper BM25F across body and title fields, each with its own length normalisation and weight (`ZET_FIELD_W_TITLE`, `ZET_FIELD_B_TITLE`, etc.). Per-doc per-field word counts are written by `zet -i` directly (sidecars `<index>.field_lengths`, `<index>.field_stats`, `<index>.docno_map.tsv` — generated in the same loop that assigns docids, so they can't drift). Generalises to up to 16 fields (4-bit field-id reserved per posting offset).
+- **Knowledge panel summaries (PRD-018, M1+M2 live)** — when a query has a hand-fed summary in the `summaries.store` FlatStore (keyed by normalised query string), `/search` returns a `summary` field and the front-end renders an animated knowledge-panel card with shimmer skeleton, cascade reveal, and pulsing badge. Missing entries fall through to the existing top-result snippet, so nav queries keep their cleaner layout. M3-M6 (offline pipeline that auto-generates summaries via a local model on a Mac Mini) is still TODO.
 - **Click-prior ranking** — 15 months of Wikipedia clickstream data is decay-weighted and added additively to BM25 scoring. Tuned to act as a tie-breaker (ZET_CLICK_ALPHA=0.05), not a dominator. Articles that real users actually click on rank higher when BM25 is close to even.
 - **Query-biased summaries** — Python summariser ported from the Turpin/Hawking/Williams SIGIR 2003 algorithm, called inline by the FastAPI server. Reads cleaned article text from a disk-resident docstore.
 - **Autosuggest** — ~1M queries ranked by clickstream popularity, served via binary search in ~1 ms.
@@ -43,15 +44,20 @@ The pipeline scripts in `zettair/wikipedia/` produce the data files the server n
 ```
 server.py          — FastAPI app: worker pool, FlatStore, summariser, search/suggest/click/queries endpoints
 summarise.py       — Inline Python query-biased summariser (PRD-016)
-index.html         — Single-file frontend (HTML + CSS + JS, no build step)
+index.html         — Single-file frontend (HTML + CSS + JS, no build step). Knowledge-panel skeleton + cascade reveal lives here (PRD-018 M2).
 loadtest.py        — Load testing with latency percentiles and histogram
 intent.py          — Nav-vs-info query classifier (head_floor signal); also writes summary-worthy query list (PRD-018)
 digest.py          — Daily query digest (reads logs/queries.jsonl, sends Telegram summary)
 requirements.txt   — Python deps: fastapi, uvicorn[standard]
+tools/
+  summaries_admin.py        — Manage the PRD-018 summaries FlatStore (build/add/list/get/delete)
+  seed_demo_summaries.sh    — Hand-feed a few demo summaries to prod
 deploy/
-  setup.sh                  — One-time VPS provisioning (install, build, download, index)
-  deploy.sh                 — Called by CI/CD on every push: pulls both repos, rebuilds zet if /opt/zettair changed, restarts service
+  setup.sh                  — Single entry point: idempotent, staleness-aware. Pulls repos, rebuilds zet, reindexes, etc. Holds a flock so two runs can't race.
+  deploy.sh                 — CI wrapper: git pull on zettair-search, then sudo bash setup.sh
   zettair-search.service    — systemd unit for the search service
+tests/
+  test_setup.sh             — 20-scenario harness for the setup.sh staleness logic (DRY_RUN mode)
 .github/workflows/deploy.yml — GitHub Actions: SSH → deploy.sh on push to main
 prd/               — Product requirements documents for each major feature
 logs/              — queries.jsonl, clicks.jsonl, zet_crashes.jsonl (gitignored)
@@ -131,15 +137,16 @@ Configured in `deploy/zettair-search.service`. Values shown match what's deploye
 | `ZET_BINARY` | `/opt/zettair/devel/zet` | Path to compiled zet binary |
 | `ZET_INDEX` | `/mnt/wikipedia-source/wikiindex/index` | Path to Zettair index |
 | `ZET_PORT` | `8765` (default) | HTTP port (Caddy reverse-proxies to this) |
-| `ZET_WORKERS` | `2` | Persistent zet worker processes |
+| `ZET_WORKERS` | `4` | Persistent zet worker processes |
 | `ZET_QUERY_TIMEOUT` | `5.0` | Per-query timeout in seconds |
-| `ZET_CLICK_PRIOR` | `…/click_prior.bin` | Click prior float32 array |
+| `ZET_CLICK_PRIOR` | `…/wikiindex/index.click_prior.bin` | Click prior float32 array (indexed by docid, lives next to the index) |
 | `ZET_CLICK_ALPHA` | `0.05` | Click prior addend strength (additive, applied in `post()`). 0.5 was tried but dominated BM25; 0.05 is a tie-breaker. |
-| `ZET_BOOST_TITLE` | `5.0` | Per-occurrence boost for title-tagged terms in BM25 |
-| `ZET_BOOST_CAPTION` | `1.0` | Reserved (no `<CAPTION>` emitted yet) |
-| `ZET_BOOST_CATEGORY` | `1.0` | Reserved |
-| `ZET_BOOST_SEEALSO` | `1.0` | Reserved |
-| `ZET_BOOST_INFOBOX` | `1.0` | Reserved |
+| `ZET_BOOST_TITLE` | `5.0` | Legacy per-occurrence boost for title-tagged terms (unused when PRD-019 is on) |
+| `ZET_PERFIELD_BM25` | `1` | Enable PRD-019 per-field BM25 (BM25F) |
+| `ZET_FIELD_W_TITLE` | `10.0` | Title field weight in BM25F |
+| `ZET_FIELD_B_TITLE` | `1.0` | Title length normalisation; 1.0 = full norm so query-fills-title is a strong signal |
+| `ZET_FIELD_W_BODY` | `1.0` | Body field weight in BM25F |
+| `ZET_FIELD_B_BODY` | `0.0` | Body length normalisation; 0 disabled — long canonical articles were losing per-mention-density fights against short stubs |
 | `ZET_SNIPPETS_STORE` | `…_snippets.store` | Pre-baked snippets (fallback for the summariser) |
 | `ZET_SNIPPETS_MAP` | `…_snippets.map` | Snippets offset map |
 | `ZET_IMAGES_STORE` | `…_images.store` | Wikimedia image URLs |
@@ -149,6 +156,8 @@ Configured in `deploy/zettair-search.service`. Values shown match what's deploye
 | `ZET_DOCSTORE` | `…enwiki_top1m.docstore` | Cleaned article text (read by inline summariser) |
 | `ZET_DOCMAP` | `…enwiki_top1m.docmap` | Docstore offset map |
 | `ZET_AUTOSUGGEST` | `…autosuggest.json` | Autosuggest sorted array |
+| `ZET_SUMMARIES_STORE` | `…summaries.store` | PRD-018 knowledge-panel summaries (keyed by normalised query string) |
+| `ZET_SUMMARIES_MAP` | `…summaries.map` | Summaries offset map |
 
 ---
 
@@ -255,6 +264,42 @@ zet command line and bumping ZET_WORKERS to 4 recovered throughput.)
 
 ---
 
+## Knowledge-panel summaries (PRD-018, M1+M2)
+
+The frontend renders a Google-style knowledge panel with shimmer skeleton + cascade reveal when `/search` returns a `summary` field. The summary lives in `summaries.store` + `summaries.map` (FlatStore, same shape as snippets/images/urls; keyed by normalised query string — `lower().strip()` with collapsed inner whitespace).
+
+**Add or update one summary on prod:**
+
+```bash
+# (run on prod, as deploy)
+sudo -u zettair python3 /opt/zettair-search/tools/summaries_admin.py \
+  --store /mnt/wikipedia-source/summaries.store \
+  --map /mnt/wikipedia-source/summaries.map \
+  add 'morrissey' '**Morrissey** is...'
+sudo systemctl restart zettair-search   # server caches the offset map at startup
+```
+
+**Re-seed the demo set:**
+
+```bash
+sudo bash /opt/zettair-search/tools/seed_demo_summaries.sh
+```
+
+**List, get, delete:**
+
+```bash
+sudo -u zettair python3 /opt/zettair-search/tools/summaries_admin.py \
+  --store /mnt/wikipedia-source/summaries.store \
+  --map /mnt/wikipedia-source/summaries.map \
+  list
+```
+
+(`get <query>` prints the markdown; `delete <query>` removes the entry from the map; `build --in foo.jsonl` does a clean rebuild from a JSONL file with `{"query": ..., "summary_md": ...}` per line.)
+
+**Bulk pipeline (M3-M6, TODO)**: offline build_summary_jobs.py on prod → ship JSONL to Mac Mini → local model generates summaries → install_summaries.py on prod. Not built yet; for now everything's hand-fed via summaries_admin.
+
+---
+
 ## Troubleshooting
 
 **Service won't start / crashes:**
@@ -307,5 +352,5 @@ Design decisions are recorded in `prd/`. Reading order if you're new to the code
 | PRD-015 | Disk-resident URL store — replaces in-RAM dbkey map | Live |
 | PRD-016 | Inline Python summariser — replaces C summariser | Live |
 | PRD-017 | Field-weighted BM25 — title boost via per-occurrence field-id | Live |
-| PRD-018 | Knowledge panel — offline-generated query summaries via local model on Mac Mini | Draft |
-| PRD-019 | Per-field BM25 (BM25F) — separate length norm and weight per field, generalises to N fields | Draft (M1+M2 prototyped locally) |
+| PRD-018 | Knowledge panel — offline-generated query summaries | M1+M2 live (server plumbing + frontend animations). M3-M6 (offline pipeline) TODO. |
+| PRD-019 | Per-field BM25 (BM25F) — separate length norm and weight per field, generalises to N fields | Live (M1+M2+M3 on prod). Folding sidecars into docmap is the only remaining TODO. |
