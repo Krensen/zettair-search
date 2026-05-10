@@ -37,7 +37,7 @@ Environment=ZET_FIELD_W_BODY=1.0
 # b=0 disables length normalisation on body, matching the legacy --b=0.0
 # we pass to zet for the per-occurrence path.
 Environment=ZET_FIELD_B_BODY=0.0
-Environment=ZET_FIELD_W_TITLE=5.0
+Environment=ZET_FIELD_W_TITLE=10.0
 # b=1 means full length norm on title — a 1-word title fully covered by
 # the query is a much stronger signal than the same query against a
 # longer title.
