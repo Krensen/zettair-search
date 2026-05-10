@@ -1,6 +1,6 @@
 # PRD-019: Per-Field BM25 — Separate Length Norm and IDF Per Field
 
-**Status:** M1+M2 implemented (zettair commit `f397601`, gated on `ZET_PERFIELD_BM25=1`, OR-decode path only). Per-doc field lengths live in a **sidecar** for now — should be folded into the docmap as M3. See "TODO: fold sidecars into the docmap" below.
+**Status:** Live on prod (zettair commits `f397601` M1+M2, `f4815b6` M3). Per-field BM25 is now active across OR, AND, and thresh decode paths. `ZET_PERFIELD_BM25=1` is the default. Per-doc field lengths still live in a sidecar — folding into the docmap is the only remaining "should do" and is captured under "TODO: fold sidecars into the docmap" below. M4 (remove per-occurrence boost) and M5 (per-field IDF) are deferred.
 **Author:** metabot
 **Date:** 2026-05-10
 
@@ -183,20 +183,22 @@ For the production server: during the reindex pipeline (already invoked when ref
 
 ## Milestones
 
-1. **M1 — sidecar + corpus stats** ✅ *(zettair `f397601`)*: Write `field_lengths.bin` + `field_stats.bin` from a TREC file via `wikipedia/build_field_lengths.py`. Load both in okapi.c at startup when `ZET_PERFIELD_BM25=1`. Verified on a 25-doc synthetic test corpus.
+1. **M1 — sidecar + corpus stats** ✅ *(zettair `f397601`, since superseded by `9922923` which moves sidecar generation into the indexer rather than a separate Python script)*: Sidecars are now written by `zet -i` directly, in the same loop that assigns docids — eliminating the docno-misalignment risk that motivated this whole rework.
 
-2. **M2 — per-field BM25 in `or_decode_offsets`** ✅ *(zettair `f397601`)*: OR path accumulates `f_dt_f[]` and computes the per-field sum via `perfield_score()`. Gated by `ZET_PERFIELD_BM25=1`. Local test: 11/11 pass with the new path, 8/11 pass on the per-occurrence-boost baseline (the 3 fixed are exactly the title-length-norm cases).
+2. **M2 — per-field BM25 in `or_decode_offsets`** ✅ *(zettair `f397601`)*: OR path accumulates `f_dt_f[]` and computes the per-field sum via `perfield_score()`. Gated by `ZET_PERFIELD_BM25=1`.
 
-3. **M3 — fold sidecars into the docmap + extend to AND/thresh paths**: Two changes that should land together:
+3. **M3 — extend per-field BM25 to AND and thresh decode paths** ✅ *(zettair `f4815b6`)*: Mirror the M2 changes into `and_decode_offsets` and `thresh_decode_offsets`. High-frequency queries (`london`, `denver`) that overflow the accumulator limit now go through per-field scoring instead of falling back to the legacy per-occurrence boost. Caveat: the first attempt (`7867f94`) appeared to crash prod, but the actual cause was an unrelated stale-`libzet.so` symlink in `/usr/local/lib/` that masked freshly-built symbols. Once that was fixed in setup.sh (`b5a41c3`), M3 redeployed cleanly and is live. The originally-planned "fold sidecars into the docmap" portion of M3 is split out below — it remains TODO.
+
+4. **M3a — fold sidecars into the docmap (TODO)**: Move `field_words[POSTINGS_MAX_FIELDS]` into `struct docmap_entry` and `avg_field_words[]` / `n_with_field[]` into `struct docmap.agg`. Bump on-disk docmap format. Eliminates the sidecar dance entirely and makes per-field stats travel with the index.
    - Move `field_words[POSTINGS_MAX_FIELDS]` into `struct docmap_entry`. Move `avg_field_words[]` and `n_with_field[]` into `struct docmap.agg`. Bump the on-disk docmap format. Update `makeindex.c` to write per-field word counts as it parses each doc — the field_id is already known at that point thanks to PRD-017.
    - Apply the same `f_dt_f[]` refactor to `and_decode_offsets` and `thresh_decode_offsets`. Replace `g_field_lengths[]` reads with `DOCMAP_GET_FIELD_WORDS(map, docno, field_id)`.
    - Delete `build_field_lengths.py`, the setup.sh sidecar build step, and the `ZET_FIELD_LENGTHS_PATH` / `ZET_FIELD_STATS_PATH` env vars.
 
-4. **M4 — remove per-occurrence boost**: Delete `g_field_boost[]`, fold env-var parsing into per-field arrays. Single source of truth.
+5. **M4 — remove per-occurrence boost (deferred)**: Delete `g_field_boost[]`, fold env-var parsing into per-field arrays. Single source of truth. Currently low priority: the legacy path is dead code once `ZET_PERFIELD_BM25=1` is the default (which it is). Removing it cleans the codebase but doesn't change behaviour.
 
-5. **M5 — per-field IDF (optional)**: Add the on-the-fly per-field doc-frequency accumulation. Use it when `ZET_FIELD_IDF=on`.
+6. **M5 — per-field IDF (deferred, optional)**: Add the on-the-fly per-field doc-frequency accumulation. Use it when `ZET_FIELD_IDF=on`.
 
-6. **M6 — production rollout**: Trigger reindex with the new docmap format (M3 forces a reindex anyway). Flip `ZET_PERFIELD_BM25=1` in the systemd unit. Verify Morrissey, Mark Zuckerberg, and other previously-broken queries.
+7. **M6 — production rollout** ✅: PRD-019 is live on prod with `ZET_PERFIELD_BM25=1`, `ZET_FIELD_W_TITLE=10.0`, `ZET_FIELD_B_TITLE=1.0`, `ZET_FIELD_W_BODY=1.0`, `ZET_FIELD_B_BODY=0.0`. Verified queries: morrissey, mark zuckerberg, denver, london, java, photosynthesis, einstein, indonesia, manchester, facebook, boxing, denver broncos all produce the canonical article at rank 1 with healthy score gaps to runners-up.
 
 M1 and M2 are done; M3 is the format migration that retires the sidecars.
 
