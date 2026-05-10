@@ -543,29 +543,30 @@
 
       resultsMeta.textContent = `About ${data.total.toLocaleString()} results (${data.took_ms} ms)`;
 
-      // Knowledge panel — top result with image
+      // Knowledge panel — top result, with image when one is available.
+      // If the image fails to load, hide just the <img> rather than the whole
+      // panel: the text content is still useful even without a picture.
       const top = data.results[0];
-      if (top.image_url) {
-        const title = formatTitle(top.docno);
-        const wikiUrl = wikiLink(top);
-        knowledgePanel.innerHTML = `
-          <div class="knowledge-panel">
-            <img src="${esc(proxyImg(top.image_url))}" alt="${esc(title)}"
-                 onerror="this.closest('.knowledge-panel').style.display='none'">
-            <div class="knowledge-panel-text">
-              <a class="kp-title" href="${esc(wikiUrl)}" target="_blank" rel="noopener noreferrer"
-                 onclick="logClick(${JSON.stringify(q)}, ${JSON.stringify(top.docno)}, 1, ${top.score})"
-              >${esc(title)}</a>
-              <div class="kp-source">
-                <img src="https://www.google.com/s2/favicons?domain=en.wikipedia.org&sz=32" alt="">
-                <span>Wikipedia · en.wikipedia.org</span>
-              </div>
-              <p>${highlightQuery(top.snippet || '', q)}</p>
+      const title = formatTitle(top.docno);
+      const wikiUrl = wikiLink(top);
+      const imgHtml = top.image_url
+        ? `<img src="${esc(proxyImg(top.image_url))}" alt="${esc(title)}"
+                onerror="this.style.display='none'">`
+        : '';
+      knowledgePanel.innerHTML = `
+        <div class="knowledge-panel">
+          ${imgHtml}
+          <div class="knowledge-panel-text">
+            <a class="kp-title" href="${esc(wikiUrl)}" target="_blank" rel="noopener noreferrer"
+               onclick="logClick(${JSON.stringify(q)}, ${JSON.stringify(top.docno)}, 1, ${top.score})"
+            >${esc(title)}</a>
+            <div class="kp-source">
+              <img src="https://www.google.com/s2/favicons?domain=en.wikipedia.org&sz=32" alt="">
+              <span>Wikipedia · en.wikipedia.org</span>
             </div>
-          </div>`;
-      } else {
-        knowledgePanel.innerHTML = '';
-      }
+            <p>${highlightQuery(top.snippet || '', q)}</p>
+          </div>
+        </div>`;
 
       // Results
       resultsList.innerHTML = data.results.map(r => {
