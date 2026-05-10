@@ -234,13 +234,14 @@ python3 loadtest.py --url https://zettair.io --duration 120 --workers 4
 
 Fetches ~38k real queries from `/suggest` (weighted by click count), fires them concurrently, reports mean/p50/p75/p90/p95/p99/max and a latency histogram.
 
-Baseline on CCX13 (2 vCPU, 8 GB RAM), 1.5M corpus, 4 workers, 10 concurrent clients:
-~17 req/s, p50 ~500 ms, p95 ~1050 ms, p99 ~1500 ms.
+Baseline on CCX13 (2 vCPU, 8 GB RAM), 1.5M corpus, 4 workers, 10 concurrent clients,
+PRD-019 per-field BM25 active: ~18 req/s, p50 ~475 ms, p95 ~930 ms, p99 ~1600 ms.
 
-(The earlier 1M corpus on the same box was ~30 req/s, p50 ~250 ms. The 1.5M
-upgrade roughly halved throughput because the bigger index fits less well in
-the page cache and the larger posting lists cost more per query. Throughput
-is CPU-bound at 4 workers on the 2 vCPUs; more workers don't help.)
+(Earlier numbers on the same box: 1M corpus was ~30 req/s. 1.5M with the
+old single-field BM25 was ~17 req/s. PRD-019 initially regressed throughput
+to ~7.5 req/s because zet was building C summaries that the Python summariser
+threw away, and worker count was still 2. Dropping --summary=plain from the
+zet command line and bumping ZET_WORKERS to 4 recovered throughput.)
 
 ---
 
