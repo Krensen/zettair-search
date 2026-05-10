@@ -26,6 +26,25 @@
 
 set -euo pipefail
 
+### ── Single-instance lock ───────────────────────────────────────────────────
+# Prevent two concurrent setup.sh runs from racing each other (e.g. CI
+# kicks off a deploy while the user is running setup.sh interactively).
+# A long-running wiki2trec inside one run + another run trying to reindex
+# is a recipe for corrupt sidecars.
+#
+# Skipped in DRY_RUN so the test suite can run multiple sandboxes in
+# parallel without tripping over each other.
+
+if [ "${DRY_RUN:-0}" != "1" ]; then
+    LOCK_FILE="${SETUP_LOCK_OVERRIDE:-/var/lock/zettair-setup.lock}"
+    exec 9>"$LOCK_FILE"
+    if ! flock -n 9; then
+        echo "ERROR: another setup.sh is already running (lock $LOCK_FILE held)." >&2
+        echo "       wait for it, or: kill the other run and rm $LOCK_FILE" >&2
+        exit 1
+    fi
+fi
+
 ### ── Config — edit these if you need to change anything ────────────────────
 # All can be overridden by environment variable for tests/test_setup.sh.
 
