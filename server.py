@@ -216,10 +216,14 @@ class ZetPool:
         self._env["ZET_BOOST_SEEALSO"]  = ZET_BOOST_SEEALSO
         self._env["ZET_BOOST_INFOBOX"]  = ZET_BOOST_INFOBOX
 
+        # b=0.0 disables BM25 length normalisation — long canonical
+        # articles (e.g. Mark Zuckerberg) were losing to short related
+        # articles (e.g. Randi Zuckerberg) on per-mention density.
+        # k1/k3 kept at the zet defaults; the parser requires all three.
         self._args = [
             ZET_BINARY,
             "-f", ZET_INDEX,
-            "--okapi",
+            "--okapi=k1=1.2,k3=1e10,b=0.0",
             "--summary=plain",
             "--output=json",
             "-n", "100",   # max results per query; Python slices to requested n
