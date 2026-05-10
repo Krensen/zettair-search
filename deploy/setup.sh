@@ -208,6 +208,33 @@ else
     log "System provisioned ($SETUP_MARKER exists) — skipping apt/useradd."
 fi
 
+### ── 2a. PRD-018 summariser group + sparky user (root) ──────────────────────
+# The Mac Mini worker (zettair-summariser repo) SSHes in as `sparky` to
+# rsync the queue directories. sparky + zettair share the `summariser`
+# group; queue dirs are mode 2775 (setgid) so files inherit it.
+SUMMARISER_GROUP=summariser
+SPARKY_USER=sparky
+
+if ! getent group "$SUMMARISER_GROUP" &>/dev/null; then
+    decided summariser-group "missing"
+    dry groupadd "$SUMMARISER_GROUP"
+else
+    skipped summariser-group "already present"
+fi
+
+# Ensure zettair is in the group. sparky is provisioned manually
+# (with their authorized_keys) — we just ensure the group membership
+# exists if the user exists.
+if id "$SERVICE_USER" &>/dev/null; then
+    dry usermod -aG "$SUMMARISER_GROUP" "$SERVICE_USER" 2>/dev/null || true
+fi
+if id "$SPARKY_USER" &>/dev/null; then
+    dry usermod -aG "$SUMMARISER_GROUP" "$SPARKY_USER" 2>/dev/null || true
+else
+    log "  NOTE: user '$SPARKY_USER' not present yet — create them with an SSH"
+    log "        key and re-run setup.sh to add to the $SUMMARISER_GROUP group."
+fi
+
 ### ── 3. Verify volume mount and set ownership upfront (root) ────────────────
 
 [ -d "$VOLUME" ] || die "$VOLUME not found — mount the Hetzner volume first"
@@ -525,6 +552,59 @@ else
     log "URLs store present."
 fi
 
+### ── 15a. PRD-018 summary queue directories (zettair, on volume) ───────────
+#
+# Layout:
+#   summaries/
+#     pending/    — producer drops job .json files here
+#     done/       — Mac Mini worker drops summary .md files here
+#     installed/  — installer moves drained .md files here (audit trail)
+#     errors/     — worker drops .error.json for failed generations
+# Mode 2775 = group-writable, setgid (files inherit the summariser group).
+
+SUMMARIES_DIR="$VOLUME/summaries"
+for sub in pending done installed errors; do
+    d="$SUMMARIES_DIR/$sub"
+    if [ ! -d "$d" ]; then
+        decided "summary-queue-$sub" "missing"
+        as_zettair mkdir -p "$d"
+    fi
+done
+# Always re-set group + perms; getent works whether the group exists or not.
+if getent group "$SUMMARISER_GROUP" &>/dev/null; then
+    dry chown -R "$SERVICE_USER:$SUMMARISER_GROUP" "$SUMMARIES_DIR"
+    dry chmod -R 2775 "$SUMMARIES_DIR"
+fi
+
+### ── 15b. PRD-018 systemd timers for producer + installer (root) ──────────
+
+decided summary-timers "always rsync"
+for unit in zettair-summary-producer.service zettair-summary-producer.timer \
+            zettair-summary-installer.service zettair-summary-installer.timer; do
+    if [ -f "$SEARCH_DIR/deploy/$unit" ]; then
+        dry cp "$SEARCH_DIR/deploy/$unit" /etc/systemd/system/
+    fi
+done
+
+# Sudoers entry so the installer (runs as zettair) can restart the
+# search service when new summaries land. Narrow allowlist.
+SUDOERS_FILE=/etc/sudoers.d/zettair-installer
+if [ ! -f "$SUDOERS_FILE" ]; then
+    decided summary-installer-sudoers "missing"
+    if [ "$DRY_RUN" != "1" ]; then
+        cat > "$SUDOERS_FILE" <<EOF
+$SERVICE_USER ALL=(root) NOPASSWD: /bin/systemctl restart zettair-search
+EOF
+        chmod 0440 "$SUDOERS_FILE"
+        # visudo --check fails the whole thing if the file is malformed
+        visudo -c -f "$SUDOERS_FILE" >/dev/null
+    else
+        echo "[dry-run] would write $SUDOERS_FILE"
+    fi
+else
+    skipped summary-installer-sudoers "already present"
+fi
+
 ### ── 16. Install systemd service (root) — always rsync the unit file ───────
 
 decided systemd-unit "always rsync"
@@ -532,6 +612,13 @@ log "Installing systemd service..."
 dry cp "$SEARCH_DIR/deploy/zettair-search.service" /etc/systemd/system/
 dry systemctl daemon-reload
 dry systemctl enable zettair-search
+# Enable + start summary timers (idempotent)
+if [ -f /etc/systemd/system/zettair-summary-producer.timer ]; then
+    dry systemctl enable --now zettair-summary-producer.timer
+fi
+if [ -f /etc/systemd/system/zettair-summary-installer.timer ]; then
+    dry systemctl enable --now zettair-summary-installer.timer
+fi
 
 ### ── 17. Verify ownership (loud failure if anything is misowned) ───────────
 

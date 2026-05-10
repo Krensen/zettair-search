@@ -1,0 +1,16 @@
+[Unit]
+Description=PRD-018 producer — scan head queries, drop pending summary jobs
+After=zettair-search.service
+Requires=zettair-search.service
+
+[Service]
+Type=oneshot
+User=zettair
+WorkingDirectory=/opt/zettair-search
+ExecStart=/usr/bin/python3 /opt/zettair-search/tools/build_summary_jobs.py --mode bulk
+StandardOutput=journal
+StandardError=journal
+
+# Producer hits the running server's /search endpoint and reads the
+# docstore via the existing server-side helpers; both are fine for
+# zettair to do.

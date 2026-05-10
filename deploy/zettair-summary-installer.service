@@ -1,0 +1,16 @@
+[Unit]
+Description=PRD-018 installer — drain done/, merge into FlatStore, restart service if needed
+After=zettair-search.service
+
+[Service]
+Type=oneshot
+User=zettair
+WorkingDirectory=/opt/zettair-search
+ExecStart=/usr/bin/python3 /opt/zettair-search/tools/install_summaries.py
+StandardOutput=journal
+StandardError=journal
+
+# The installer needs to `sudo systemctl restart zettair-search` after
+# installing new summaries (server caches the offset map at startup).
+# That capability is granted via /etc/sudoers.d/zettair-installer,
+# which setup.sh installs.

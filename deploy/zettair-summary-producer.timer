@@ -1,0 +1,11 @@
+[Unit]
+Description=PRD-018 producer timer — drop new summary jobs in pending/
+
+[Timer]
+# First fire 5 min after boot (give service time to warm up), then every 4h.
+OnBootSec=5min
+OnUnitActiveSec=4h
+Unit=zettair-summary-producer.service
+
+[Install]
+WantedBy=timers.target
