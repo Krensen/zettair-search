@@ -1,26 +1,29 @@
 #!/usr/bin/env python3
 """
-intent.py — explore nav-vs-info signal in BM25 score curves.
+intent.py — decide which head queries should get a knowledge-panel summary.
 
-Pulls the global top-K queries from /suggest, runs each through /search
-at n=10, and looks at the *shape* of the top-K score curve. Idea: nav
-queries have one dominant doc; info queries spread similar scores
-across many docs.
+Pulls the global top-K queries from /suggest, runs each through /search at
+n=10, and uses the shape of the top-10 BM25 score curve to decide whether
+a knowledge-panel summary is worth generating for that query.
 
-The primary signal is:
-    head_floor_ratio = score[0] / score[k-1]
+The decision is single-threshold:
 
-i.e. how much does the head of the curve dominate its floor. Compared
-to mass1 (rank-1 share of total) this preserves dynamic range — mass1
-is bounded [1/k, 1.0] and on real data collapses into 0.10–0.18, which
-is too narrow to threshold cleanly. r1/r_k uses a multiplicative scale
-that's not crushed by absolute BM25 levels.
+    head_floor = score[0] / score[k-1]
+    skip_summary = head_floor >= --skip-threshold   (default 1.50)
 
-mass1 is still recorded per row for reference.
+Idea: when the rank-1 score dominates the floor of the top-10 by a big
+margin, the top result IS the answer and a knowledge-panel summary
+adds nothing. Everything else gets a summary. That includes the "broad
+topic" queries (flat curves) and the merely-ambiguous middle.
+
+This run reports the threshold, the histogram, and writes the full
+summary-worthy queries list to a file so you can eyeball coverage and
+sanity-check the call.
 
 Usage:
-  python3 intent.py                      # head 2000, k=10
-  python3 intent.py --top 500            # smaller pool, faster
+  python3 intent.py                                # head 2000, k=10, threshold 1.50
+  python3 intent.py --skip-threshold 1.30          # tighter — skip more queries
+  python3 intent.py --out summary_queries.txt
   python3 intent.py --url https://zettair.io
 """
 
@@ -34,7 +37,6 @@ import urllib.request
 
 
 def fetch_top_queries(base_url: str, top_k: int) -> list[tuple[str, int]]:
-    """Pull global top-K (query, count) pairs from /suggest."""
     alpha = "abcdefghijklmnopqrstuvwxyz0123456789"
     prefixes = [a + b for a in alpha for b in alpha]
     seen = {}
@@ -70,7 +72,6 @@ def docno_to_title(docno: str) -> str:
 
 
 def histogram(values: list[float], lo: float, hi: float, n_buckets: int = 20) -> str:
-    """Render an ASCII histogram with fixed-width bars."""
     if not values:
         return "(no data)"
     width = (hi - lo) / n_buckets
@@ -97,9 +98,11 @@ def main() -> None:
     parser.add_argument("--url", default="http://localhost:8765", help="base URL of the zettair server")
     parser.add_argument("--top", type=int, default=2000, help="size of the head pool to consider")
     parser.add_argument("--k", type=int, default=10, help="top-K results per query (default 10)")
-    parser.add_argument("--n", type=int, default=0, help="number of queries to classify (0 = whole top pool)")
+    parser.add_argument("--skip-threshold", type=float, default=1.50,
+                        help="head_floor at or above this means skip summary (top result IS the answer)")
+    parser.add_argument("--out", default="summary_queries.txt",
+                        help="where to write the summary-worthy queries list")
     parser.add_argument("--seed", type=int, default=0, help="RNG seed")
-    parser.add_argument("--samples", type=int, default=12, help="curves to print per zone (low / mid / high mass1)")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -109,44 +112,31 @@ def main() -> None:
     if not pairs:
         print("No autosuggest entries returned. Is the server running?")
         return
+    click_by_q = dict(pairs)
     print(f"Got {len(pairs)} queries (max click count {pairs[0][1]}, min {pairs[-1][1]}).", flush=True)
 
     queries = [q for q, _ in pairs]
-    if args.n and args.n < len(queries):
-        weights = [c for _, c in pairs]
-        sample = random.choices(queries, weights=weights, k=args.n)
-    else:
-        sample = queries
 
-    print(f"Fetching top-{args.k} for {len(sample)} queries...", flush=True)
+    print(f"Fetching top-{args.k} for {len(queries)} queries...", flush=True)
     rows = []
     failures = 0
     failure_examples: list[tuple[str, str]] = []
-    for q in sample:
+    for q in queries:
         try:
-            res = fetch_results(args.url, q, n_results=args.k)
+            res = fetch_results(args.url, q, args.k)
         except Exception as e:
             failures += 1
             if len(failure_examples) < 8:
                 failure_examples.append((q, type(e).__name__ + ": " + str(e)[:80]))
             continue
         scores = [r.get("score", 0.0) for r in res]
-        # require K full results; queries with too-few hits are not in the head we care about
-        if len(scores) < args.k:
+        if len(scores) < args.k or scores[0] <= 0 or scores[-1] <= 0:
             continue
-        if scores[0] <= 0 or scores[-1] <= 0:
-            continue
-        total = sum(scores)
-        mass1 = scores[0] / total
-        head_floor = scores[0] / scores[-1]   # primary signal
-        rank1_doc = docno_to_title(res[0].get("docno", "") or "")
         rows.append({
             "q": q,
             "scores": scores,
-            "mass1": mass1,
-            "head_floor": head_floor,
-            "ratio12": scores[0] / scores[1] if scores[1] > 0 else float("inf"),
-            "rank1": rank1_doc,
+            "head_floor": scores[0] / scores[-1],
+            "rank1": docno_to_title(res[0].get("docno", "") or ""),
         })
 
     if not rows:
@@ -154,44 +144,45 @@ def main() -> None:
         return
 
     rows.sort(key=lambda r: r["head_floor"])
-
     hf = [r["head_floor"] for r in rows]
+
     print(f"\n=== {len(rows)} queries with full top-{args.k} ({failures} request failures) ===")
     if failure_examples:
         print("first failures:")
         for q, e in failure_examples:
             print(f"  {q!r:<40}  {e}")
     print(
-        f"head_floor = score[0] / score[{args.k - 1}]:  "
-        f"min={min(hf):.2f}  p25={hf[len(hf) // 4]:.2f}  "
-        f"median={statistics.median(hf):.2f}  "
-        f"p75={hf[3 * len(hf) // 4]:.2f}  p95={hf[int(0.95 * len(hf))]:.2f}  max={max(hf):.2f}"
+        f"head_floor:  min={min(hf):.2f}  p25={hf[len(hf) // 4]:.2f}  "
+        f"median={statistics.median(hf):.2f}  p75={hf[3 * len(hf) // 4]:.2f}  "
+        f"p95={hf[int(0.95 * len(hf))]:.2f}  max={max(hf):.2f}"
     )
-    # head_floor is bounded [1.0, +inf]. Pick a sensible upper bound for the
-    # histogram from the data — clamp at p99 so a single outlier doesn't
-    # squash the bulk into one bucket.
     hi = hf[int(0.99 * len(hf))]
     print(f"\nhistogram of head_floor (1.0 = flat, larger = peakier; clamped to p99={hi:.2f}):")
     print(histogram(hf, lo=1.0, hi=hi, n_buckets=20))
 
-    # Print sample curves from low / mid / high zones — eyeball whether
-    # the shape matches the intuition before committing to a threshold.
-    n = len(rows)
-    zones = [
-        ("LOW head_floor (flattest — likely info or broken)",  rows[: max(1, n // 10)]),
-        ("MID head_floor (middle of distribution)",            rows[(n // 2) - args.samples : (n // 2) + args.samples]),
-        ("HIGH head_floor (peakiest — likely nav)",            rows[-max(1, n // 10) :]),
-    ]
-    for label, zone in zones:
-        print(f"\n--- {label} ---")
-        random.shuffle(zone)
-        for r in zone[: args.samples]:
-            curve = " ".join(f"{s:5.2f}" for s in r["scores"])
-            print(
-                f"  hf={r['head_floor']:5.2f}  mass1={r['mass1']:.3f}  "
-                f"r1/r2={r['ratio12']:5.2f}  q={r['q']!r:<35}  rank1={r['rank1']!r}"
-            )
-            print(f"    curve: {curve}")
+    skip = [r for r in rows if r["head_floor"] >= args.skip_threshold]
+    keep = [r for r in rows if r["head_floor"] < args.skip_threshold]
+    print(f"\nat skip-threshold {args.skip_threshold}:")
+    print(f"  skip summary (top is the answer):     {len(skip):5d}  ({100.0 * len(skip) / len(rows):.1f}%)")
+    print(f"  generate summary (informational-ish): {len(keep):5d}  ({100.0 * len(keep) / len(rows):.1f}%)")
+
+    print(f"\n=== sample of 10 queries we'd SKIP (top is the answer) ===")
+    for r in random.sample(skip, min(10, len(skip))):
+        print(f"  hf={r['head_floor']:5.2f}  q={r['q']!r:<40}  rank1={r['rank1']!r}")
+
+    # Write the full summary-worthy list to a file, sorted by click count
+    # (most popular first — that's the natural processing order for the
+    # knowledge-panel job).
+    keep.sort(key=lambda r: -click_by_q.get(r["q"], 0))
+    with open(args.out, "w", encoding="utf-8") as f:
+        f.write(f"# {len(keep)} queries marked summary-worthy (head_floor < {args.skip_threshold})\n")
+        f.write(f"# Sorted by click count (most popular first).\n")
+        f.write(f"# columns: clicks  head_floor  query  -> rank1_doc\n")
+        for r in keep:
+            clicks = click_by_q.get(r["q"], 0)
+            f.write(f"{clicks:>10}  {r['head_floor']:5.2f}  {r['q']!r:<40}  -> {r['rank1']!r}\n")
+    print(f"\nWrote {len(keep)} summary-worthy queries to {args.out}")
+    print(f"  (sorted by click count, most popular first; head: {keep[0]['q']!r})")
 
 
 if __name__ == "__main__":
