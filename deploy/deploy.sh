@@ -14,6 +14,26 @@ log "Deploying zettair-search..."
 cd "$INSTALL_DIR/zettair-search"
 git pull origin main
 
+log "Pulling and rebuilding zettair (C engine)..."
+cd "$INSTALL_DIR/zettair"
+ZETTAIR_OLD=$(git rev-parse HEAD)
+git pull origin main
+ZETTAIR_NEW=$(git rev-parse HEAD)
+if [ "$ZETTAIR_OLD" != "$ZETTAIR_NEW" ]; then
+    log "  zettair changed ($ZETTAIR_OLD..$ZETTAIR_NEW) — rebuilding"
+    cd "$INSTALL_DIR/zettair/devel"
+    make -j"$(nproc)"
+    # libtool leaves zet as a wrapper script that re-links on first
+    # invocation; the zettair user can't write into deploy-owned .libs/.
+    # Replace the wrapper with the real ELF binary built into .libs/.
+    sudo cp "$INSTALL_DIR/zettair/devel/.libs/zet" "$INSTALL_DIR/zettair/devel/zet"
+    sudo chown zettair:zettair "$INSTALL_DIR/zettair/devel/zet"
+    log "  zet binary updated"
+else
+    log "  zettair already up to date"
+fi
+cd "$INSTALL_DIR/zettair-search"
+
 log "Installing Python dependencies..."
 pip3 install --quiet --break-system-packages -r requirements.txt
 
