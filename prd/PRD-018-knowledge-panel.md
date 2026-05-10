@@ -1,8 +1,8 @@
 # PRD-018: Knowledge Panel — Offline-Generated Query Summaries
 
-**Status:** Draft
+**Status:** M1+M2 live on prod (server FlatStore + animated front-end panel, hand-fed demo summaries). M3-M7 in flight via a queue-based architecture: prod drops job files in `pending/`, Mac Mini (separate `Krensen/zettair-summariser` repo) rsyncs them, generates with a local model, rsyncs results back to `done/`, prod-side installer drains into the FlatStore.
 **Author:** metabot
-**Date:** 2026-05-09
+**Date:** 2026-05-09 (rev 2026-05-11: queue architecture, separate Mac Mini repo)
 
 ---
 
@@ -62,33 +62,67 @@ This matches what Google actually does for the bulk of its knowledge panels — 
 
 ## Design
 
-Three machines, three jobs, two artefact formats.
+Three loose loops, files as the medium. Producer on prod, worker on Mac Mini, installer on prod. Each loop runs independently — the Mac Mini can be offline for a week and prod doesn't care; pending jobs just queue. Multiple Mac Minis can poll the same queue and coordinate via filesystem semantics (rsync's per-file rename is the lock).
 
 ```
-   ┌─────────────────────┐         jobs.jsonl          ┌──────────────────────┐
-   │  PROD (Hetzner VPS) │ ──────────────────────────▶ │  LOCAL (Mac Mini)    │
-   │                     │  (queries + top-M doc text) │                      │
-   │  build_summary_     │                             │  generate_summaries  │
-   │  jobs.py            │ ◀────────────────────────── │  .py                 │
-   │                     │       summaries.jsonl       │                      │
-   │  install_summaries  │                             │                      │
-   │  .py                │                             │                      │
-   │                     │                             │                      │
-   │  server.py + UI     │                             │                      │
-   └─────────────────────┘                             └──────────────────────┘
+                    ┌───────────────────────────────────────────────┐
+                    │  PROD VPS  /mnt/wikipedia-source/summaries/   │
+                    │                                               │
+                    │   ┌───────────────────────────────────────┐   │
+                    │   │  producer (cron, every few hours)     │   │
+                    │   │  ─ tools/build_summary_jobs.py        │   │
+                    │   │    head 2000 + live-enqueue           │   │
+                    │   │  ─ writes pending/<query_norm>.json   │───┼─┐
+                    │   └───────────────────────────────────────┘   │ │
+                    │                                               │ │ rsync
+                    │   ┌───────────────────────────────────────┐   │ │ over ssh
+                    │   │  installer (cron, every ~5 min)       │   │ │ (sparky)
+                    │   │  ─ tools/install_summaries.py         │◀──┼─┼─┐
+                    │   │  ─ drains done/, calls                │   │ │ │
+                    │   │    summaries_admin.py add,            │   │ │ │
+                    │   │    restarts service when needed       │   │ │ │
+                    │   └───────────────────────────────────────┘   │ │ │
+                    └───────────────────────────────────────────────┘ │ │
+                                                                      │ │
+                                ┌─────────────────────────────────────┘ │
+                                ▼                                       │
+                    ┌───────────────────────────────────────────────┐   │
+                    │  MAC MINI  (Krensen/zettair-summariser repo)  │   │
+                    │                                               │   │
+                    │   ┌───────────────────────────────────────┐   │   │
+                    │   │  poll.py (launchd timer)              │   │   │
+                    │   │  ─ rsync pending/ → local inbox       │   │   │
+                    │   │  ─ generate, write outbox             │   │   │
+                    │   │  ─ rsync outbox → prod done/          │───┼───┘
+                    │   └───────────────────────────────────────┘   │
+                    │   ┌───────────────────────────────────────┐   │
+                    │   │  generate.py + prompt.py              │   │
+                    │   │  ─ ollama / llama.cpp local model     │   │
+                    │   └───────────────────────────────────────┘   │
+                    └───────────────────────────────────────────────┘
 ```
 
-### Artefact 1: `summary_jobs.jsonl`
+### Directory layout on prod
 
-Generated on prod. One JSON object per line:
+Under `/mnt/wikipedia-source/summaries/`, all owned by `zettair`, group `summariser` (a new group that includes `zettair` and `sparky`), mode `2775` (setgid so files inherit the group):
+
+- `pending/` — `<query_norm>.json` files dropped by the producer. Workers claim them via rsync `--remove-source-files`; the rename-then-unlink is the lock.
+- `done/` — `<query_norm>.md` files dropped by the worker after successful generation. Plain markdown, no metadata wrapper.
+- `installed/` — `<query_norm>.md` files moved here once the installer has merged them into the FlatStore. Audit trail; prune older than 90 days.
+- `errors/` — `<query_norm>.error.json` for jobs the worker explicitly failed (model output didn't parse, hit safety filter, etc.). For manual retry / inspection.
+
+### Pending job format (`pending/<query_norm>.json`)
 
 ```json
 {
-  "query": "albert einstein",
+  "schema_version": 1,
+  "query": "Albert Einstein",
   "query_norm": "albert einstein",
   "click_weight": 4837,
   "score_ratio": 1.18,
   "intent": "info",
+  "created_at": "2026-05-11T01:23:45Z",
+  "source": "bulk",
   "results": [
     {"docid": 12345, "rank": 1, "title": "Albert Einstein", "url": "https://en.wikipedia.org/wiki/Albert_Einstein", "score": 18.4, "text": "..."},
     {"docid": 67890, "rank": 2, "title": "Theory of relativity", "url": "...", "score": 15.5, "text": "..."}
@@ -96,68 +130,114 @@ Generated on prod. One JSON object per line:
 }
 ```
 
-The `text` field is the full document text from `_docstore`, capped per-doc (proposed: 12 KB) so even M=5 stays well inside a 7B model's context.
+`source` is `"bulk"` (came from build_summary_jobs scanning the head pool) or `"live"` (came from a real user query). `text` is the cleaned docstore content capped per-doc at 12 KB.
 
-Two flavours of the file:
+### Done summary format (`done/<query_norm>.md`)
 
-- `summary_jobs_full.jsonl` — head N queries, regenerated on corpus refresh.
-- `summary_jobs_delta.jsonl` — queries newly in the head that aren't in `summaries.store` yet.
+Plain markdown. No metadata wrapper. Filename carries `query_norm`; body is what the installer feeds to `summaries_admin.py add`.
 
-### Artefact 2: `summaries.jsonl`
+```
+**Albert Einstein** (1879–1955) was a German-born theoretical physicist...
 
-Generated on the Mac Mini. One JSON object per line:
-
-```json
-{
-  "query_norm": "albert einstein",
-  "summary_md": "**Albert Einstein** (1879–1955) was a German-born theoretical physicist...\n\n- Developed the theory of relativity\n- Won the 1921 Nobel Prize in Physics\n- ...",
-  "model": "llama-3.1-8b-instruct",
-  "generated_at": "2026-05-09T14:32:11Z",
-  "source_docids": [12345, 67890, 11122]
-}
+- Developed the theory of relativity
+- Won the 1921 Nobel Prize in Physics
+- ...
 ```
 
-### Storage on prod
+### Producer — `tools/build_summary_jobs.py` (on prod)
 
-`summaries.store` (binary blobs, concatenated) + `summaries.map` (JSON dict from `query_norm` → `{offset, length}`). Same FlatStore pattern as `_docstore` and `_urls_store` — `os.pread()` per access, no in-memory hash beyond the offset map.
+Run by a systemd timer every few hours.
 
-### Server changes
+**Bulk mode (default):** walks the top 2000 head queries from autosuggest (same as `intent.py`'s `fetch_top_queries`), classifies each via the rank1/rank2 score ratio, drops `pending/<query_norm>.json` for any informational query (ratio < 2.0) that:
 
-`server.py` gains a `_summaries_store` instance loaded at startup. `/search` looks up `query_norm` in the offset map; if present, includes `"summary": "<markdown>"` in the response. If absent, the field is omitted (or `null`). No fallback, no live generation.
+- isn't already in `summaries.map`,
+- doesn't already have a file in `pending/`, `done/`, or `installed/`.
 
-A small admin endpoint `/admin/summaries-stats` returns count, oldest entry by `generated_at`, and pending-delta count (queries in the head but not in the store).
+For each candidate, the producer hits `/search` to get top-M results, then reads the cleaned text from `_docstore` (or from the snippet store as fallback), trims to 12 KB per doc, and writes the job file atomically (`pending/foo.json.tmp` → rename to `pending/foo.json`).
 
-### Front-end
+**Live mode:** server.py's `/search` handler, after returning results to the user, appends to a `live_queue.jsonl` log when the response had no summary AND `score_ratio < 2.0`. Fire-and-forget via `asyncio.create_task` on a thread executor so the request path isn't blocked. A separate `digest_live_queue.py` cron promotes high-confidence queries (≥ N unique-session hits in last 24h) to proper `pending/*.json` job files. Coalesces dupes — a popular query that hits 100 times produces one job.
 
-`index.html` renders the panel above the result list when `summary` is present. Markdown → HTML via a small renderer (or just `marked` if we already have it). Visual treatment matches Google's knowledge panel: card with subtle border, query echoed as title, summary prose, key-facts bullets, "summary based on top results" footer.
+### Worker — `Krensen/zettair-summariser` repo on Mac Mini
+
+Separate public repo. Files-as-protocol means the worker only needs to know the directory schema, not how prod produces or installs.
+
+```
+zettair-summariser/
+├── README.md
+├── setup.sh                       — provision a fresh Mac Mini (brew, pip, launchd plist)
+├── poll.py                        — top-level loop, run by launchd every N min
+├── generate.py                    — wraps the local model (ollama / llama.cpp), retries
+├── prompt.py                      — prompt template + output parsing
+├── config.example.toml            — copy to config.toml on first setup; SSH host, model id, M
+├── com.zettair.summariser.plist
+└── tests/fixtures/                — known job JSONs + expected summary structures
+```
+
+`poll.py` flow (one call):
+
+1. `rsync -av --remove-source-files sparky@prod:/mnt/wikipedia-source/summaries/pending/*.json /local/inbox/`. The `--remove-source-files` step is per-file atomic on prod's filesystem — multiple workers racing each claim a disjoint subset.
+2. For each `inbox/*.json`: call `generate.py` to produce a markdown summary; write to `/local/outbox/<query_norm>.md`. If model output doesn't validate, write `/local/errors/<query_norm>.error.json` instead.
+3. `rsync -av --remove-source-files /local/outbox/*.md sparky@prod:/mnt/wikipedia-source/summaries/done/` and the same for `errors/`.
+4. Move `inbox/*.json` to `inbox-processed/` locally as an audit trail.
+
+Failure of any rsync step is idempotent: files stay where they are and the next run retries.
+
+### Installer — `tools/install_summaries.py` (on prod)
+
+Run by a systemd timer every ~5 minutes.
+
+1. Acquire flock on `/mnt/wikipedia-source/summaries/installer.lock`.
+2. List `done/*.md`.
+3. For each: derive `query_norm` from the filename, read body, call `summaries_admin.py add` to update the FlatStore. Move to `installed/`.
+4. If at least one new summary was installed, `systemctl restart zettair-search` so the server reloads the offset map.
+5. Release lock.
+
+A narrow sudoers entry lets the `zettair` user run `systemctl restart zettair-search` without password — the installer otherwise needs no root.
+
+### Storage on prod (M1)
+
+`summaries.store` (binary blobs, concatenated) + `summaries.map` (JSON dict from `query_norm` → `[offset, length]`). FlatStore. Read by `os.pread()`. Already implemented.
+
+### Server changes (M1)
+
+`server.py` returns `summary` field in `/search` responses when present. Already implemented. Live-mode logging is the only addition: append to `live_queue.jsonl` when `score_ratio < 2.0` and no summary was returned.
+
+### Front-end (M2)
+
+Knowledge panel with shimmer skeleton + cascade reveal when `data.summary` is present. Already implemented.
 
 ### Query normalisation
 
-`query_norm` is `lower().strip()` with collapsed inner whitespace. Same normalisation in `build_summary_jobs.py`, `generate_summaries.py`, `install_summaries.py`, and `server.py` lookup. Defined once in a shared helper to avoid drift.
+`query_norm(s)` is `lower().strip()` with collapsed inner whitespace. Defined in `server.py`, re-implemented identically in `tools/summaries_admin.py`, the new producer/installer scripts, and `zettair-summariser/poll.py`. Trivial enough that re-implementing is cheaper than pulling a shared module across two repos. If the function ever gets more complex, promote it to a tiny shared file synced via the schema_version bump.
 
 ### Nav-vs-info filter
 
-`build_summary_jobs.py` reuses the rank1/rank2 score-ratio classifier from `intent.py`. Queries with ratio ≥ threshold (proposed: 2.0) are skipped — the top result is the answer; a panel adds nothing. Threshold is configurable; we'll tune it from the first run's bucket distribution.
+`build_summary_jobs.py` reuses the rank1/rank2 score-ratio classifier from `intent.py`. Queries with ratio ≥ 2.0 are skipped — the top result is the answer; a panel adds nothing. Threshold is configurable.
+
+### SSH and permissions
+
+The `sparky` user already exists on prod (home `/home/sparky`) with SSH key auth set up. Required additional setup:
+
+- Create group `summariser`, add `zettair` and `sparky` to it.
+- Create `/mnt/wikipedia-source/summaries/{pending,done,installed,errors}/`, owner `zettair`, group `summariser`, mode `2775`.
+- `sparky` can read `pending/`, write `done/` and `errors/`. Cannot touch `installed/` or the FlatStore directly — only the prod-side installer has those permissions.
+- Installer cron runs as `zettair`. Narrow `/etc/sudoers.d/zettair-installer` granting `NOPASSWD: /bin/systemctl restart zettair-search` only.
 
 ---
 
 ## Operational flow
 
-**Weekly (or on corpus refresh):**
+Three independent timers, no orchestration between them.
 
-1. On prod: `build_summary_jobs.py --top 2000 --m 5 --out summary_jobs_full.jsonl`. Reads `/suggest` for query pool, runs each through `/search`, filters out nav by score ratio, pulls top-M doc text from `_docstore`. Writes JSONL.
-2. Pull `summary_jobs_full.jsonl` to the Mac Mini (rsync / scp).
-3. On Mac Mini: `generate_summaries.py --in summary_jobs_full.jsonl --out summaries_full.jsonl --model <local>`. One model call per query, structured prompt, retries on malformed output.
-4. Push `summaries_full.jsonl` back to prod.
-5. On prod: `install_summaries.py --in summaries_full.jsonl --rebuild`. Builds new `summaries.store` + `summaries.map`. Atomic rename. `systemctl restart zettair-search`.
+**On prod (every few hours):** `build_summary_jobs.py --mode bulk` scans the top-N head queries, drops new `.json` files in `pending/`. Idempotent.
 
-**Daily:**
+**On Mac Mini (launchd, every N minutes):** `poll.py` rsyncs pending down (claiming via `--remove-source-files`), generates summaries with the local model, rsyncs done back. If the box is offline this just doesn't run; jobs queue on prod.
 
-1. On prod: `build_summary_jobs.py --delta --out summary_jobs_delta.jsonl`. Same as step 1 but only for queries currently in the head pool that are *not* in `summaries.map`.
-2. Pull / generate / push as above.
-3. On prod: `install_summaries.py --in summaries_delta.jsonl --merge`. Appends to `summaries.store`, updates `summaries.map`. Atomic rename. Restart.
+**On prod (every ~5 minutes):** `install_summaries.py` drains `done/` into the FlatStore, restarts the service when anything new lands.
 
-The pull and push directions are intentionally manual to start — we'll automate them once the shapes are stable.
+**Live queue (continuous):** server.py logs informational-but-unsummarised queries to `live_queue.jsonl`; a cron promotes high-confidence ones to `pending/`.
+
+All loops fail safely: a stuck Mac Mini stretches the queue but doesn't break prod; a failed generation lands in `errors/` and can be retried by hand; a partial rsync just retries next tick.
 
 ---
 
@@ -173,15 +253,15 @@ The pull and push directions are intentionally manual to start — we'll automat
 
 ## Milestones
 
-1. **M1 — server-side plumbing.** FlatStore for summaries, `/search` returns the field when present. Empty store, no panel rendered. Verifiable: dummy entries injected, response carries `summary`, front-end shows the card.
-2. **M2 — front-end panel.** `index.html` renders a Google-style knowledge panel above results when `summary` is present. CSS, markdown rendering, mobile-friendly layout.
-3. **M3 — `build_summary_jobs.py` (prod).** Produces `summary_jobs_full.jsonl` for top N queries. Includes nav filter.
-4. **M4 — `generate_summaries.py` (Mac Mini).** Calls local model, produces `summaries.jsonl`. Tuned prompt.
-5. **M5 — `install_summaries.py` (prod).** Builds store + map, atomic install, restarts service.
-6. **M6 — delta loop.** Both `build_` and `install_` gain `--delta` / `--merge` modes. Daily cron on prod.
-7. **M7 — admin/observability.** `/admin/summaries-stats` endpoint, structured logging on hits/misses, dashboard for coverage and median age.
+1. **M1 — server-side plumbing.** ✅ Live. FlatStore for summaries, `/search` returns `summary` field when present, env vars wired through the systemd unit. Validated with hand-fed demo summaries.
+2. **M2 — front-end panel.** ✅ Live. Shimmer skeleton + cascade reveal in `index.html` when `data.summary` is present. Missing summaries fall through to the existing top-result panel.
+3. **M3 — queue scaffolding (prod).** Create `/mnt/wikipedia-source/summaries/{pending,done,installed,errors}/` with the right group/perms via setup.sh. Add `summariser` group, add `sparky` to it. Stub `tools/build_summary_jobs.py` with `--mode bulk` only (no live mode yet). One systemd timer.
+4. **M4 — Mac Mini repo + worker (zettair-summariser).** New `Krensen/zettair-summariser` repo. `setup.sh` provisions ollama or llama.cpp, pip deps, SSH config, launchd plist. `poll.py` does the rsync ↔ generate ↔ rsync loop. `prompt.py` carries the prompt template; `generate.py` wraps the model call with retries.
+5. **M5 — installer (prod).** `tools/install_summaries.py` drains `done/`, calls `summaries_admin.py add`, restarts service. Systemd timer every 5 min. flock around the batch.
+6. **M6 — live queue.** server.py logs unsummarised informational queries to `live_queue.jsonl`. `tools/digest_live_queue.py` cron promotes high-confidence queries to `pending/`. Counter de-dupes.
+7. **M7 — observability.** `/admin/summaries-stats` endpoint: total count, oldest entry, queue depths (pending/done/installed/errors). Structured logs from each timer write per-batch totals so coverage growth is greppable.
 
-M1 and M2 are independently testable with hand-written summary entries. M3+ is the offline pipeline.
+M1+M2 are independently testable with hand-fed summaries (done). M3-M7 is the automated pipeline. M3 and M5 can land in `zettair-search` in any order; M4 lands in the new `Krensen/zettair-summariser` repo.
 
 ---
 
