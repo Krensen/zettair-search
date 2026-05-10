@@ -423,11 +423,15 @@ fi
 if [ -n "$CLICK_PRIOR_REASON" ]; then
     decided click-prior "$CLICK_PRIOR_REASON"
     log "Building click prior from $INDEX_DOCNO_MAP..."
-    # Need clickstream files alongside the script (build_click_prior.py
-    # globs its own dir). Logs land in the wiki-dir-relative logs/ dir
-    # (env-overridable) — make it writable by zettair.
-    as_zettair mkdir -p "$WIKI_DIR/logs"
-    as_zettair bash -c "cd '$WIKI_DIR' && python3 build_click_prior.py --index '$INDEX_PREFIX'"
+    # build_click_prior.py globs its own dir for clickstream files (so
+    # we cd into WIKI_DIR), and writes a log to CLICKSTREAM_LOG_DIR
+    # (env-overridable). The wiki dir itself is owned by deploy so the
+    # zettair user can't mkdir there; redirect logs onto the volume,
+    # which zettair owns.
+    CLICKSTREAM_LOG_DIR="$VOLUME/logs"
+    as_zettair mkdir -p "$CLICKSTREAM_LOG_DIR"
+    as_zettair env CLICKSTREAM_LOG_DIR="$CLICKSTREAM_LOG_DIR" bash -c \
+        "cd '$WIKI_DIR' && python3 build_click_prior.py --index '$INDEX_PREFIX'"
     log "click_prior.bin written to $INDEX_CLICK_PRIOR"
 else
     skipped click-prior "click_prior.bin present and newer than its inputs"
