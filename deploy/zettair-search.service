@@ -28,11 +28,11 @@ Environment=ZET_AUTOSUGGEST=/mnt/wikipedia-source/autosuggest.json
 Environment=ZET_DOCSTORE=/mnt/wikipedia-source/enwiki_top1m.docstore
 Environment=ZET_DOCMAP=/mnt/wikipedia-source/enwiki_top1m.docmap
 
-# PRD-019: per-field BM25 (BM25F). Off by default. Flip to 1 once the
-# index has been rebuilt with the new zet binary (setup.sh handles
-# this — sidecars index.field_lengths and index.field_stats live next
-# to the index and are auto-discovered via ZET_INDEX).
-Environment=ZET_PERFIELD_BM25=0
+# PRD-019: per-field BM25 (BM25F). Live. Sidecars index.field_lengths
+# and index.field_stats live next to the index and are auto-discovered
+# via ZET_INDEX. Set to 0 to fall back to the legacy per-occurrence
+# title boost path (ZET_BOOST_TITLE).
+Environment=ZET_PERFIELD_BM25=1
 Environment=ZET_FIELD_W_BODY=1.0
 # b=0 disables length normalisation on body, matching the legacy --b=0.0
 # we pass to zet for the per-occurrence path.
