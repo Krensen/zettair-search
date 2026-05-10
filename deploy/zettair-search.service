@@ -16,7 +16,7 @@ Environment=ZET_CLICK_ALPHA=0.05
 # PRD-017: per-occurrence boost for title-tagged terms. Used only on the
 # legacy scoring path (ZET_PERFIELD_BM25=0); ignored when PRD-019 is on.
 Environment=ZET_BOOST_TITLE=5.0
-Environment=ZET_WORKERS=2
+Environment=ZET_WORKERS=4
 Environment=ZET_QUERY_TIMEOUT=5.0
 Environment=ZET_SNIPPETS_STORE=/mnt/wikipedia-source/enwiki_top1m_snippets.store
 Environment=ZET_SNIPPETS_MAP=/mnt/wikipedia-source/enwiki_top1m_snippets.map

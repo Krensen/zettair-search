@@ -235,12 +235,15 @@ class ZetPool:
         # articles (e.g. Mark Zuckerberg) were losing to short related
         # articles (e.g. Randi Zuckerberg) on per-mention density.
         # k1/k3 kept at zet defaults so we only change the one knob.
+        # No --summary= flag: PRD-016 replaced zet's C summariser with an
+        # inline Python summariser that reads the cleaned docstore text.
+        # Letting zet also build summaries was burning ~300ms on common-
+        # term queries with no consumer for the output.
         self._args = [
             ZET_BINARY,
             "-f", ZET_INDEX,
             "--okapi",
             "--b=0.0",
-            "--summary=plain",
             "--output=json",
             "-n", "100",   # max results per query; Python slices to requested n
         ]
