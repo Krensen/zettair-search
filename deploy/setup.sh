@@ -284,20 +284,6 @@ if [ -n "$BUILD_REASON" ]; then
         dry chown "$DEPLOY_USER:$DEPLOY_USER" "$ZET_BIN"
     fi
 
-    # Register libzet.so so the bare binary can find it without LD_LIBRARY_PATH.
-    # Resolve to the real .so.0.0.0 file (libzet.so.0 in .libs is itself a
-    # symlink, and a chained symlink confused the loader by resolving the
-    # relative target inside /usr/local/lib/ rather than the build dir).
-    # Also clear any stale .so.0.0.0 left in /usr/local/lib/ from earlier
-    # broken setups that did `cp` instead of a proper symlink.
-    if [ -f "$ZETTAIR_DIR/devel/.libs/libzet.so.0.0.0" ]; then
-        dry rm -f /usr/local/lib/libzet.so.0.0.0
-        dry ln -sf "$ZETTAIR_DIR/devel/.libs/libzet.so.0.0.0" /usr/local/lib/libzet.so.0.0.0
-        dry ln -sf "$ZETTAIR_DIR/devel/.libs/libzet.so.0.0.0" /usr/local/lib/libzet.so.0
-        dry ln -sf "$ZETTAIR_DIR/devel/.libs/libzet.so.0.0.0" /usr/local/lib/libzet.so
-        dry ldconfig
-    fi
-
     log "Binary installed at: $ZET_BIN"
     # If zet rebuilt, the index might be stale wrt new on-disk format,
     # but for now we trust the format hasn't changed unless the param
@@ -306,6 +292,19 @@ if [ -n "$BUILD_REASON" ]; then
 else
     skipped zet-binary "binary present, ELF, no source newer"
     log "Zettair binary up to date — skipping."
+fi
+
+# Always-refresh the libzet.so symlinks regardless of whether zet
+# rebuilt. Older setup runs left a real .so.0.0.0 file in /usr/local/lib
+# (a `cp`, not a symlink) that masked freshly built libs. Symlinking to
+# the absolute path of the ELF in .libs ensures the loader follows the
+# build dir every time.
+if [ -f "$ZETTAIR_DIR/devel/.libs/libzet.so.0.0.0" ]; then
+    dry rm -f /usr/local/lib/libzet.so.0.0.0
+    dry ln -sf "$ZETTAIR_DIR/devel/.libs/libzet.so.0.0.0" /usr/local/lib/libzet.so.0.0.0
+    dry ln -sf "$ZETTAIR_DIR/devel/.libs/libzet.so.0.0.0" /usr/local/lib/libzet.so.0
+    dry ln -sf "$ZETTAIR_DIR/devel/.libs/libzet.so.0.0.0" /usr/local/lib/libzet.so
+    dry ldconfig
 fi
 
 ### ── 6. Download enwiki bz2 dump (zettair, to volume) ──────────────────────
