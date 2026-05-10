@@ -2,23 +2,24 @@
 """
 intent.py — explore nav-vs-info signal in BM25 score curves.
 
-Pulls the global top-K queries from /suggest (the same head pool we'll be
-generating knowledge-panel summaries for), runs each through /search at
-n=10, and looks at the *shape* of the score curve. The intuition is that
-a navigational query has one dominant doc — so rank-1 captures most of
-the top-10 score mass. An informational query spreads the mass across
-many similarly-relevant docs.
+Pulls the global top-K queries from /suggest, runs each through /search
+at n=10, and looks at the *shape* of the top-K score curve. Idea: nav
+queries have one dominant doc; info queries spread similar scores
+across many docs.
 
-The signal we're testing is:
-    mass1 = score[0] / sum(score[0..9])
+The primary signal is:
+    head_floor_ratio = score[0] / score[k-1]
 
-mass1 is bounded [0.1, 1.0]: 0.1 means perfectly flat (all 10 docs
-equally relevant), higher means more concentrated on rank-1. We don't
-classify yet — this run just reports the histogram of mass1 and prints
-sample top-10 score curves so the right threshold can be eyeballed.
+i.e. how much does the head of the curve dominate its floor. Compared
+to mass1 (rank-1 share of total) this preserves dynamic range — mass1
+is bounded [1/k, 1.0] and on real data collapses into 0.10–0.18, which
+is too narrow to threshold cleanly. r1/r_k uses a multiplicative scale
+that's not crushed by absolute BM25 levels.
+
+mass1 is still recorded per row for reference.
 
 Usage:
-  python3 intent.py                      # head 2000, n=10 results each
+  python3 intent.py                      # head 2000, k=10
   python3 intent.py --top 500            # smaller pool, faster
   python3 intent.py --url https://zettair.io
 """
@@ -133,17 +134,17 @@ def main() -> None:
         # require K full results; queries with too-few hits are not in the head we care about
         if len(scores) < args.k:
             continue
-        if scores[0] <= 0 or sum(scores) <= 0:
+        if scores[0] <= 0 or scores[-1] <= 0:
             continue
         total = sum(scores)
         mass1 = scores[0] / total
-        mass3 = sum(scores[:3]) / total  # top-3 share, useful as a secondary signal
+        head_floor = scores[0] / scores[-1]   # primary signal
         rank1_doc = docno_to_title(res[0].get("docno", "") or "")
         rows.append({
             "q": q,
             "scores": scores,
             "mass1": mass1,
-            "mass3": mass3,
+            "head_floor": head_floor,
             "ratio12": scores[0] / scores[1] if scores[1] > 0 else float("inf"),
             "rank1": rank1_doc,
         })
@@ -152,31 +153,34 @@ def main() -> None:
         print("No usable rows.")
         return
 
-    rows.sort(key=lambda r: r["mass1"])
+    rows.sort(key=lambda r: r["head_floor"])
 
-    masses = [r["mass1"] for r in rows]
+    hf = [r["head_floor"] for r in rows]
     print(f"\n=== {len(rows)} queries with full top-{args.k} ({failures} request failures) ===")
     if failure_examples:
         print("first failures:")
         for q, e in failure_examples:
             print(f"  {q!r:<40}  {e}")
     print(
-        f"mass1 = score[0] / sum(score[0..{args.k - 1}]):  "
-        f"min={min(masses):.3f}  p25={masses[len(masses) // 4]:.3f}  "
-        f"median={statistics.median(masses):.3f}  "
-        f"p75={masses[3 * len(masses) // 4]:.3f}  max={max(masses):.3f}"
+        f"head_floor = score[0] / score[{args.k - 1}]:  "
+        f"min={min(hf):.2f}  p25={hf[len(hf) // 4]:.2f}  "
+        f"median={statistics.median(hf):.2f}  "
+        f"p75={hf[3 * len(hf) // 4]:.2f}  p95={hf[int(0.95 * len(hf))]:.2f}  max={max(hf):.2f}"
     )
-    # mass1 is bounded [1/k, 1.0] — render across that range
-    print(f"\nhistogram of mass1 (lower = flatter curve, higher = peakier):")
-    print(histogram(masses, lo=1.0 / args.k, hi=1.0, n_buckets=20))
+    # head_floor is bounded [1.0, +inf]. Pick a sensible upper bound for the
+    # histogram from the data — clamp at p99 so a single outlier doesn't
+    # squash the bulk into one bucket.
+    hi = hf[int(0.99 * len(hf))]
+    print(f"\nhistogram of head_floor (1.0 = flat, larger = peakier; clamped to p99={hi:.2f}):")
+    print(histogram(hf, lo=1.0, hi=hi, n_buckets=20))
 
-    # Print sample curves from low / mid / high mass1 — eyeball whether the
-    # shape matches the intuition before committing to a threshold.
+    # Print sample curves from low / mid / high zones — eyeball whether
+    # the shape matches the intuition before committing to a threshold.
     n = len(rows)
     zones = [
-        ("LOW mass1 (flattest curves — likely info)",  rows[: max(1, n // 10)]),
-        ("MID mass1 (middle of distribution)",          rows[(n // 2) - args.samples : (n // 2) + args.samples]),
-        ("HIGH mass1 (peakiest curves — likely nav)",   rows[-max(1, n // 10) :]),
+        ("LOW head_floor (flattest — likely info or broken)",  rows[: max(1, n // 10)]),
+        ("MID head_floor (middle of distribution)",            rows[(n // 2) - args.samples : (n // 2) + args.samples]),
+        ("HIGH head_floor (peakiest — likely nav)",            rows[-max(1, n // 10) :]),
     ]
     for label, zone in zones:
         print(f"\n--- {label} ---")
@@ -184,7 +188,7 @@ def main() -> None:
         for r in zone[: args.samples]:
             curve = " ".join(f"{s:5.2f}" for s in r["scores"])
             print(
-                f"  mass1={r['mass1']:.3f}  mass3={r['mass3']:.3f}  "
+                f"  hf={r['head_floor']:5.2f}  mass1={r['mass1']:.3f}  "
                 f"r1/r2={r['ratio12']:5.2f}  q={r['q']!r:<35}  rank1={r['rank1']!r}"
             )
             print(f"    curve: {curve}")
