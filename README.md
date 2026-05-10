@@ -10,8 +10,8 @@ Live at: **https://zettair.io**
 
 A production search engine built on [Zettair](https://github.com/rmit-ir/zettair), a research-grade BM25 engine from RMIT. The interesting parts are the layer on top of it:
 
-- **Field-weighted BM25** — title term occurrences contribute more to the score than body occurrences via a 4-bit field-id encoded in each posting offset. Tunable per-field via env vars (`ZET_BOOST_TITLE` etc). Generalises to up to 16 fields without a format change.
-- **Click-prior ranking** — 15 months of Wikipedia clickstream data is decay-weighted and added to BM25 scoring. Articles that real users actually click on rank higher.
+- **Field-weighted BM25** — title term occurrences contribute more to the score than body occurrences via a 4-bit field-id encoded in each posting offset. Tunable per-field via env vars (`ZET_BOOST_TITLE` etc). Generalises to up to 16 fields without a format change. (PRD-019 generalises this further to per-field BM25 with separate length normalisation per field — design only at the moment, not yet wired up.)
+- **Click-prior ranking** — 15 months of Wikipedia clickstream data is decay-weighted and added additively to BM25 scoring. Tuned to act as a tie-breaker (ZET_CLICK_ALPHA=0.05), not a dominator. Articles that real users actually click on rank higher when BM25 is close to even.
 - **Query-biased summaries** — Python summariser ported from the Turpin/Hawking/Williams SIGIR 2003 algorithm, called inline by the FastAPI server. Reads cleaned article text from a disk-resident docstore.
 - **Autosuggest** — ~1M queries ranked by clickstream popularity, served via binary search in ~1 ms.
 - **Persistent worker pool** — 2 long-lived `zet` processes with the index memory-mapped. Queries arrive via stdin, results come back as JSON Lines. ~50× lower latency than spawning a process per query.
@@ -41,15 +41,16 @@ The pipeline scripts in `zettair/wikipedia/` produce the data files the server n
 ## Repository layout (`zettair-search`)
 
 ```
-server.py          — FastAPI app: worker pool, FlatStore, summariser, search/suggest/click endpoints
+server.py          — FastAPI app: worker pool, FlatStore, summariser, search/suggest/click/queries endpoints
 summarise.py       — Inline Python query-biased summariser (PRD-016)
 index.html         — Single-file frontend (HTML + CSS + JS, no build step)
 loadtest.py        — Load testing with latency percentiles and histogram
+intent.py          — Nav-vs-info query classifier (head_floor signal); also writes summary-worthy query list (PRD-018)
 digest.py          — Daily query digest (reads logs/queries.jsonl, sends Telegram summary)
 requirements.txt   — Python deps: fastapi, uvicorn[standard]
 deploy/
   setup.sh                  — One-time VPS provisioning (install, build, download, index)
-  deploy.sh                 — Called by CI/CD on every push: git pull + restart
+  deploy.sh                 — Called by CI/CD on every push: pulls both repos, rebuilds zet if /opt/zettair changed, restarts service
   zettair-search.service    — systemd unit for the search service
 .github/workflows/deploy.yml — GitHub Actions: SSH → deploy.sh on push to main
 prd/               — Product requirements documents for each major feature
@@ -64,7 +65,7 @@ logs/              — queries.jsonl, clicks.jsonl, zet_crashes.jsonl (gitignore
 Browser (HTTPS)
   └─▶ Caddy (VPS, handles TLS + reverse proxy)
         └─▶ server.py :8765 (FastAPI / uvicorn)
-              ├─▶ ZetPool — 2 persistent zet processes
+              ├─▶ ZetPool — N persistent zet processes
               │     query via stdin → JSON Lines on stdout
               │     index is memory-mapped by the OS
               │     ZET_BOOST_TITLE etc applied at score time
@@ -87,7 +88,10 @@ Browser (HTTPS)
 6. The response is returned; the worker is released back to the pool
 
 **Click flow:**
-`POST /click` logs `{ts, q, docno, rank, score}` to `logs/clicks.jsonl`. Used as input for ranking experiments.
+`POST /click` logs `{ts, q, docno, rank, score, ip, local}` to `logs/clicks.jsonl`. Used as input for ranking experiments.
+
+**Query log viewer (`/queries`):**
+`GET /queries[?start=YYYY-MM-DD&end=YYYY-MM-DD&limit=500&include_local=0]` aggregates `logs/queries.jsonl` over a UTC date range and renders a sorted-by-count HTML table. Localhost test traffic (curl, `intent.py`, `loadtest.py` running on the box) is excluded by default; set `include_local=1` to see it. Append `&format=json` for the JSON form.
 
 ---
 
@@ -118,18 +122,20 @@ The filename prefix `enwiki_top1m` is historical; the corpus is 1.5M.
 
 ## Environment variables
 
-Configured in `deploy/zettair-search.service`. Values shown match what's deployed:
+Configured in `deploy/zettair-search.service`. Values shown match what's deployed.
+
+`server.py` also passes `--b=0.0` to `zet` on the worker command line, disabling BM25 length normalisation. Long canonical articles (Mark Zuckerberg, Denver) were losing per-mention-density fights against shorter related ones (Randi Zuckerberg, Denver Broncos); turning length norm off plus the increased title boost gives the canonical article room to win. PRD-019 outlines a per-field BM25 design that would let body and title have separate length-norm parameters.
 
 | Variable | Value | Description |
 |----------|-------|-------------|
 | `ZET_BINARY` | `/opt/zettair/devel/zet` | Path to compiled zet binary |
 | `ZET_INDEX` | `/mnt/wikipedia-source/wikiindex/index` | Path to Zettair index |
-| `ZET_PORT` | `8765` (default) | HTTP port |
+| `ZET_PORT` | `8765` (default) | HTTP port (Caddy reverse-proxies to this) |
 | `ZET_WORKERS` | `2` | Persistent zet worker processes |
 | `ZET_QUERY_TIMEOUT` | `5.0` | Per-query timeout in seconds |
 | `ZET_CLICK_PRIOR` | `…/click_prior.bin` | Click prior float32 array |
-| `ZET_CLICK_ALPHA` | `0.5` | Click boost strength (0 = off, 1.5 = strong) |
-| `ZET_BOOST_TITLE` | `3.0` | Per-occurrence boost for title-tagged terms in BM25 |
+| `ZET_CLICK_ALPHA` | `0.05` | Click prior addend strength (additive, applied in `post()`). 0.5 was tried but dominated BM25; 0.05 is a tie-breaker. |
+| `ZET_BOOST_TITLE` | `5.0` | Per-occurrence boost for title-tagged terms in BM25 |
 | `ZET_BOOST_CAPTION` | `1.0` | Reserved (no `<CAPTION>` emitted yet) |
 | `ZET_BOOST_CATEGORY` | `1.0` | Reserved |
 | `ZET_BOOST_SEEALSO` | `1.0` | Reserved |
@@ -186,8 +192,10 @@ Config at the top of `setup.sh`: `CORPUS_SIZE` (default 1500000), `CLICKSTREAM_M
 Every push to `main` triggers `.github/workflows/deploy.yml`, which SSHs to the VPS and runs `deploy/deploy.sh`:
 
 ```
-git pull → pip install -r requirements.txt → systemctl restart → health check
+git pull (zettair-search) → git pull (zettair) → if zettair HEAD changed, rebuild & install zet → pip install -r requirements.txt → systemctl restart → health check
 ```
+
+`deploy.sh` rebuilds the zet C engine when `/opt/zettair` HEAD moves and copies `.libs/zet` over the libtool wrapper script (which would otherwise try to re-link on first invocation and fail because the running service user can't write into the build dir).
 
 **One-time setup:**
 1. `ssh-keygen -t ed25519 -f deploy_key`
@@ -197,7 +205,7 @@ git pull → pip install -r requirements.txt → systemctl restart → health ch
 
 **Reverse proxy:** Caddy is installed separately on the VPS and handles TLS termination and reverse proxying to `:8765`. It is not managed by this repo. Caddy sets `X-Forwarded-For` with the real client IP, which `server.py` reads for logging.
 
-CI deploys are code-only. They don't rebuild the index or the zet binary. Index/binary changes need a manual `setup.sh` run on the server.
+CI deploys rebuild the zet binary if the C source changed, but do not rebuild the index. Index changes (corpus refresh, postings format change) still need a manual `setup.sh` run on the server.
 
 ---
 
@@ -263,7 +271,10 @@ Index files are probably owned by root. Fix: `sudo chown -R zettair:zettair /mnt
 The `>4 GB TREC` offset overflow bug. Should be fixed in zettair commit `3aba055`+. If it returns, check `git log /opt/zettair/devel/src/include/_docmap.h` for the `off_t offset` field.
 
 **Field boost not applying:**
-Check `journalctl -u zettair-search` for a `[field_boost] ZET_BOOST_TITLE = 3.00` line at startup. If missing, the env var isn't being passed through. Verify `/etc/systemd/system/zettair-search.service` has the `Environment=ZET_BOOST_TITLE=3.0` line and `systemctl daemon-reload && systemctl restart zettair-search`.
+The `[field_boost] ZET_BOOST_TITLE = 5.00` line is logged to zet's stderr, which `server.py` captures via `asyncio.subprocess.PIPE` and does not forward — so it won't show in journald. To verify the boost is loading, run zet manually with the same env: `sudo -u zettair env ZET_BOOST_TITLE=5.0 /opt/zettair/devel/zet -f /mnt/wikipedia-source/wikiindex/index --okapi --b=0.0 -n 3 <<< 'test' 2>&1 | head`. If the field_boost line is missing, check `/etc/systemd/system/zettair-search.service` and `systemctl daemon-reload && systemctl restart zettair-search`.
+
+**Click prior loaded but not affecting scores:**
+After a corpus refresh, rebuild `click_prior.bin` against the *current* index — the file is keyed by Zettair internal docid, which shifts on every reindex. Run `cd /opt/zettair/wikipedia && python3 build_docno_map.py /mnt/wikipedia-source/enwiki_top1m.trec && python3 build_click_prior.py && cp click_prior.bin /mnt/wikipedia-source/click_prior.bin && sudo systemctl restart zettair-search`. Verify by running zet manually — top-20 click scores should look like a list of obvious popular articles (Elon_Musk, Donald_Trump, Main_Page, etc.).
 
 **Autosuggest returns nothing:**
 ```bash
@@ -295,3 +306,5 @@ Design decisions are recorded in `prd/`. Reading order if you're new to the code
 | PRD-015 | Disk-resident URL store — replaces in-RAM dbkey map | Live |
 | PRD-016 | Inline Python summariser — replaces C summariser | Live |
 | PRD-017 | Field-weighted BM25 — title boost via per-occurrence field-id | Live |
+| PRD-018 | Knowledge panel — offline-generated query summaries via local model on Mac Mini | Draft |
+| PRD-019 | Per-field BM25 (BM25F) — separate length norm and weight per field, generalises to N fields | Draft (M1+M2 prototyped locally) |

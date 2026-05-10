@@ -62,11 +62,26 @@ def _ts() -> str:
 _LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 
 def _client_ip(request: Request) -> tuple[str, bool]:
-    """Return (ip, is_local). The service is exposed directly — no reverse
-    proxy — so the socket peer IS the real client IP. Forwarding headers
-    are not honoured because anyone can set them."""
+    """Return (ip, is_local).
+
+    Caddy is the public-facing reverse proxy and sets X-Forwarded-For with
+    the real client IP. The socket peer is always loopback for proxied
+    traffic, so we cannot use it to identify the client. We trust
+    X-Forwarded-For only when the socket peer IS loopback (i.e. the
+    request really did come from Caddy on the same host); otherwise the
+    header could be spoofed by something talking to :8765 directly.
+
+    "local" means: a request that did NOT come through Caddy and arrived
+    on loopback — i.e. curl/intent.py/loadtest.py running on the box.
+    Those are excluded from /queries by default."""
     peer = (request.client.host if request.client else "") or ""
-    return peer, peer in _LOOPBACK
+    if peer in _LOOPBACK:
+        fwd = request.headers.get("x-forwarded-for")
+        if fwd:
+            ip = fwd.split(",")[0].strip()
+            return ip, False
+        return peer, True
+    return peer, False
 
 async def _append_log(path: str, record: dict):
     os.makedirs(os.path.dirname(path), exist_ok=True)
