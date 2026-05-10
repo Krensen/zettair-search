@@ -285,8 +285,16 @@ if [ -n "$BUILD_REASON" ]; then
     fi
 
     # Register libzet.so so the bare binary can find it without LD_LIBRARY_PATH.
-    if [ -f "$ZETTAIR_DIR/devel/.libs/libzet.so.0" ]; then
-        dry ln -sf "$ZETTAIR_DIR/devel/.libs/libzet.so.0" /usr/local/lib/libzet.so.0
+    # Resolve to the real .so.0.0.0 file (libzet.so.0 in .libs is itself a
+    # symlink, and a chained symlink confused the loader by resolving the
+    # relative target inside /usr/local/lib/ rather than the build dir).
+    # Also clear any stale .so.0.0.0 left in /usr/local/lib/ from earlier
+    # broken setups that did `cp` instead of a proper symlink.
+    if [ -f "$ZETTAIR_DIR/devel/.libs/libzet.so.0.0.0" ]; then
+        dry rm -f /usr/local/lib/libzet.so.0.0.0
+        dry ln -sf "$ZETTAIR_DIR/devel/.libs/libzet.so.0.0.0" /usr/local/lib/libzet.so.0.0.0
+        dry ln -sf "$ZETTAIR_DIR/devel/.libs/libzet.so.0.0.0" /usr/local/lib/libzet.so.0
+        dry ln -sf "$ZETTAIR_DIR/devel/.libs/libzet.so.0.0.0" /usr/local/lib/libzet.so
         dry ldconfig
     fi
 
