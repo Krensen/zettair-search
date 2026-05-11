@@ -596,7 +596,14 @@ async def trending(n: int = Query(8, ge=1, le=50)):
     for it in items:
         if not it.get("query"):
             continue
+        # Newer payloads carry the raw url-form title as `docno`.
+        # Older payloads (or anything where the fetcher hasn't run
+        # since the docno field was added) won't. Reconstruct from
+        # the display title in that case — spaces back to underscores
+        # is the canonical wikipedia url form for ~all titles.
         docno = it.get("docno")
+        if not docno and it.get("title"):
+            docno = it["title"].replace(" ", "_")
         in_index = bool(docno) and docno in _docstore._map
         entry = {
             "query": it["query"],
