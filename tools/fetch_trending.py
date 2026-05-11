@@ -69,10 +69,11 @@ DENYLIST_PATH = Path(os.environ.get(
 # 500 compresses that gap.
 SMOOTHING               = 500
 # Minimum current views to qualify. En.wikipedia hourly traffic is in
-# the millions; a real "trending now" article gets >=1000 views in
-# the sample hour. Below that is noise from non-English readers or
-# botnets briefly poking an obscure article.
-MIN_VIEWS_NOW           = 1000
+# the millions; "trending now" should mean the article is in roughly
+# the top few hundred globally for the sample hour. 3000 hourly views
+# is empirically about that threshold and filters out long-tail
+# regional / community-driven bursts that aren't broadly notable.
+MIN_VIEWS_NOW           = 3000
 # Minimum median baseline. An article that's normally invisible
 # (<50/hour median) doesn't deserve to be on the homepage even if it
 # spiked — too easy to game, too noisy.
