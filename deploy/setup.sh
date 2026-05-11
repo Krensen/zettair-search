@@ -626,7 +626,8 @@ dry chown -R "$SERVICE_USER:$SERVICE_USER" "$TRENDING_DIR"
 dry chmod -R 0755 "$TRENDING_DIR"
 
 decided trending-timer "always rsync"
-for unit in zettair-trending.service zettair-trending.timer; do
+for unit in zettair-trending.service zettair-trending.timer \
+            zettair-trending-compact.service zettair-trending-compact.timer; do
     if [ -f "$SEARCH_DIR/deploy/$unit" ]; then
         dry cp "$SEARCH_DIR/deploy/$unit" /etc/systemd/system/
     fi
@@ -667,6 +668,9 @@ if [ -f /etc/systemd/system/zettair-summary-installer.timer ]; then
 fi
 if [ -f /etc/systemd/system/zettair-trending.timer ]; then
     dry systemctl enable --now zettair-trending.timer
+fi
+if [ -f /etc/systemd/system/zettair-trending-compact.timer ]; then
+    dry systemctl enable --now zettair-trending-compact.timer
 fi
 
 ### ── 17. Verify ownership (loud failure if anything is misowned) ───────────

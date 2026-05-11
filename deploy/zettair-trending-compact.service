@@ -1,0 +1,11 @@
+[Unit]
+Description=PRD-020 trending — weekly compaction of history.jsonl (>30d samples)
+
+[Service]
+Type=oneshot
+User=zettair
+WorkingDirectory=/opt/zettair-search
+ExecStart=/usr/bin/python3 /opt/zettair-search/tools/fetch_trending.py --compact
+StandardOutput=journal
+StandardError=journal
+MemoryMax=256M
