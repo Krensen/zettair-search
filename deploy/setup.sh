@@ -398,15 +398,31 @@ done
 
 ### ── 8. select_top_articles.py → top_titles.txt (zettair, to volume) ────────
 
+# Stale if missing, or if any clickstream file is newer (existing
+# behaviour), or — new — if PRD-020 trending history has new samples
+# since the last rebuild. The latter ensures a popular page that
+# broke after the last clickstream dump (e.g. a new world leader)
+# gets folded into the corpus on the next index rebuild without
+# manual intervention.
+TRENDING_HISTORY="$VOLUME/trending/history.jsonl"
+TITLES_STALE_REASON=""
 if [ ! -f "$TITLES_FILE" ]; then
-    decided top-titles "missing"
+    TITLES_STALE_REASON="missing"
+elif is_stale_glob "$TITLES_FILE" "$WIKI_DIR"/clickstream-enwiki-*.tsv.gz; then
+    TITLES_STALE_REASON="a clickstream file is newer than top_titles.txt"
+elif [ -f "$TRENDING_HISTORY" ] && is_stale "$TITLES_FILE" "$TRENDING_HISTORY"; then
+    TITLES_STALE_REASON="trending history is newer than top_titles.txt"
+fi
+
+if [ -n "$TITLES_STALE_REASON" ]; then
+    decided top-titles "$TITLES_STALE_REASON"
     log "Running select_top_articles.py (CORPUS_SIZE=$CORPUS_SIZE)..."
     as_zettair python3 "$WIKI_DIR/select_top_articles.py" \
-        --top "$CORPUS_SIZE" --out "$TITLES_FILE"
+        --top "$CORPUS_SIZE" --out "$TITLES_FILE" \
+        --trending-history "$TRENDING_HISTORY"
     log "top_titles.txt written to $TITLES_FILE"
 else
-    skipped top-titles "already exists"
-    log "top_titles.txt already exists — skipping select_top_articles.py."
+    skipped top-titles "up-to-date with clickstream + trending history"
 fi
 
 ### ── 9. wiki2trec.py → TREC + sidecar files (zettair, to volume) ───────────

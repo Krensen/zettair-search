@@ -331,6 +331,8 @@ The spike score is what stops perennials like Cleopatra and Hitler — they're a
 
 **In-index vs external chips.** `/api/trending` joins each item's docno against our docstore. Articles we have in the corpus get an `in_index: true` chip that triggers a search; articles we don't (e.g. very fresh pages not in the 1.5M cut) get an `in_index: false` chip with a different icon that links directly to en.wikipedia.org. This avoids the failure mode where a trending article routes to an empty results page.
 
+**Trending feeds the next corpus rebuild.** `select_top_articles.py` reads `/mnt/wikipedia-source/trending/history.jsonl` and union-s every title that has ever appeared in a sample on top of the top-N clickstream cut. So next time the index is rebuilt (new enwiki dump, fresh TREC), every article that's been popular since the last rebuild is in the corpus by construction. The corpus grows by however many trending-only titles have accumulated (typically tens of thousands over a 30-day window); the README still loosely says "1.5M" but the actual number creeps up after each rebuild. `setup.sh` triggers `select_top_articles.py` when `top_titles.txt` is missing, clickstream is newer, or trending history is newer.
+
 **Manual ops:**
 
 ```bash

@@ -407,6 +407,30 @@ Not in scope here — flagged so we don't repaint the data shape later.
 - Optionally archive to `history-YYYY-MM.jsonl.gz`.
 - A `compact` subcommand on `fetch_trending.py`, run weekly.
 
+### M5b — Trending feeds the next corpus rebuild (live)
+
+`select_top_articles.py --trending-history` reads `history.jsonl` and
+union-s every title that has ever appeared in a sample on top of the
+top-N clickstream cut. So next time the index is rebuilt (new enwiki
+dump → fresh TREC → fresh index), every article that's been popular
+since the last rebuild is guaranteed to be in the corpus.
+
+This addresses the "Mark Carney problem" — an article that broke
+after the last clickstream dump (so isn't in the clickstream top-N)
+but has been on the homepage trending rail for weeks. Without this,
+clicking that chip routes to a wiki-link (the `in_index: false`
+fallback from M2). With this, the next rebuild includes the article
+and future searches work directly.
+
+`setup.sh` extends the staleness logic on `top_titles.txt` to
+include trending history as a trigger. This means every setup.sh
+run after the live timer has fired will spend ~1 min re-running
+`select_top_articles.py`; the more-expensive downstream steps
+(`wiki2trec.py`, indexing) are still gated by their own staleness
+checks (TREC is "rebuild only when missing") so this isn't a
+constant rebuild trigger — it just keeps the title list fresh and
+ready for the next intentional rebuild.
+
 ### M6 (deferred) — Ranking boost
 
 Separate PRD. The data this builds is the input; the ranker plumbing
