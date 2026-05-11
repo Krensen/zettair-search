@@ -473,3 +473,18 @@ we see the single-paragraph approach's quality bar.
 - **i18n.** Specificity scoring uses English month names. For now we
   only fetch en.wikipedia, so this is fine. Anything multilingual is
   a future PRD.
+
+## Known behaviours (not bugs)
+
+- **Ambiguous titles drop off the rail.** Wikimedia attributes
+  pageviews to whatever article the user actually lands on. If
+  "Euphoria" spikes because of the HBO show but readers initially
+  land on `Euphoria` (the article about the emotion), our pipeline
+  tracks the emotion article. That article has no recent dated event
+  paragraph → gate rejects it → chip falls off. This is correct
+  behaviour: the spike isn't a clean signal that the show is making
+  news (it's a signal that the *term* is being searched, which is
+  weaker). The chip would correctly appear if `Euphoria_(American_TV_series)`
+  itself were spiking. Considered "follow disambig pages" as a
+  mitigation; decided to accept the current behaviour rather than
+  add complexity for a noisy signal.
