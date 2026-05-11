@@ -186,6 +186,7 @@ def existing_query_norms() -> set[str]:
 
     # In flight or terminal
     for sub, suffix in [
+        ("priority", ".json"),
         ("pending",  ".json"),
         ("done",     ".md"),
         ("installed",".md"),

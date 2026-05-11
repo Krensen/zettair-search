@@ -54,8 +54,9 @@ tools/
   seed_demo_summaries.sh    — Hand-feed a few demo summaries to prod
   fetch_trending.py         — PRD-020 trending fetcher: pulls hourly pageview dumps, scores, writes current.json. PRD-021 adds the article-specificity gate.
   trending_denylist.txt     — PRD-020 user denylist (case-insensitive substring matches against title)
-  build_news_summary_jobs.py — PRD-021 producer: reads current.json, enqueues :news jobs for the Mac Mini
+  build_news_summary_jobs.py — PRD-021 producer: reads current.json, enqueues :news jobs into priority/ for the Mac Mini
   compact_news_summaries.py — PRD-021 weekly compaction: drop :news entries whose subject hasn't trended recently
+  enqueue.py                — manual hot-path: drop a single job into priority/ for re-run or emergency processing
 deploy/
   setup.sh                  — Single entry point: idempotent, staleness-aware. Pulls repos, rebuilds zet, reindexes, etc. Holds a flock so two runs can't race.
   deploy.sh                 — CI wrapper: git pull on zettair-search, then sudo bash setup.sh
@@ -303,6 +304,16 @@ sudo -u zettair python3 /opt/zettair-search/tools/summaries_admin.py \
 (`get <query>` prints the markdown; `delete <query>` removes the entry from the map; `build --in foo.jsonl` does a clean rebuild from a JSONL file with `{"query": ..., "summary_md": ...}` per line.)
 
 **Bulk pipeline (M3-M6, TODO)**: offline build_summary_jobs.py on prod → ship JSONL to Mac Mini → local model generates summaries → install_summaries.py on prod. Not built yet; for now everything's hand-fed via summaries_admin.
+
+**Priority queue.** Alongside `pending/`, the worker also drains `/mnt/wikipedia-source/summaries/priority/` and processes it FIRST every sweep. PRD-021 news jobs land here automatically. To manually push a query through the priority lane (e.g. re-run after a prompt change, or force-add an emergency entry):
+
+```bash
+sudo -u zettair python3 /opt/zettair-search/tools/enqueue.py "elon musk"
+sudo -u zettair python3 /opt/zettair-search/tools/enqueue.py --news "tristan da cunha"
+sudo -u zettair python3 /opt/zettair-search/tools/enqueue.py --raw my_job.json
+```
+
+The biographical mode (no flag) builds a job from the live `/search` results; `--news` builds from the current Wikipedia article using the same heuristic as the trending fetcher; `--raw` copies a pre-built JSON file. None of them check for an existing summary — that's deliberate, since manual enqueue is for forcing re-runs.
 
 ---
 

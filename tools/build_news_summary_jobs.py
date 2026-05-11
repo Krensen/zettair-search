@@ -70,7 +70,7 @@ def installed_md_path(query_norm: str, suffix: str = ":news") -> Path:
 def already_pending(query_norm: str, suffix: str = ":news") -> bool:
     """True if the same job is already in the pipeline anywhere."""
     name = f"{query_norm}{suffix}.json"
-    for sub in ("pending", "done", "errors"):
+    for sub in ("priority", "pending", "done", "errors"):
         if (SUMMARIES_DIR / sub / name).exists():
             return True
     # Also check the .md outcome dirs in case it was just installed
@@ -108,9 +108,12 @@ def write_job(item: dict) -> Path:
     query_norm = query.strip().lower() or item.get("title", "").strip().lower()
     if not query_norm:
         raise ValueError(f"item has no query/title: {item}")
-    pending_dir = SUMMARIES_DIR / "pending"
-    pending_dir.mkdir(parents=True, exist_ok=True)
-    path = pending_dir / f"{query_norm}:news.json"
+    # News jobs go to priority/ — the Mac Mini drains this dir before
+    # the bulk pending/ queue so news summaries appear quickly even
+    # when the biographical backlog is large.
+    priority_dir = SUMMARIES_DIR / "priority"
+    priority_dir.mkdir(parents=True, exist_ok=True)
+    path = priority_dir / f"{query_norm}:news.json"
     payload = {
         "schema_version": 1,
         "mode": "news-spike",

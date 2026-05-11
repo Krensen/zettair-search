@@ -587,7 +587,7 @@ fi
 # Mode 2775 = group-writable, setgid (files inherit the summariser group).
 
 SUMMARIES_DIR="$VOLUME/summaries"
-for sub in pending done installed errors; do
+for sub in priority pending done installed errors; do
     d="$SUMMARIES_DIR/$sub"
     if [ ! -d "$d" ]; then
         decided "summary-queue-$sub" "missing"
