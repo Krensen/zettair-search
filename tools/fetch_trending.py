@@ -100,8 +100,13 @@ SHAPE_PREV_MIN_RATIO    = 1.15
 WIKI_API_URL            = "https://en.wikipedia.org/w/api.php"
 MAX_CANDIDATES_TO_GATE  = 50    # cap API fan-out per fetch
 MIN_PARA_LEN            = 120   # chars; below this is too short to be a real event para
-MIN_SPECIFICITY_SCORE   = 4     # at least one day-precision date OR two month-precision
-EVENT_FRESHNESS_DAYS    = 14    # most recent date in para must be within this many days
+# Loosened after first prod run: with 56h of bootstrap history and a
+# narrow candidate pool, the strict gate (score>=4, fresh<=14d) found
+# zero matches across all 7 spikers and the rail went empty. We accept
+# a few more false positives in exchange for a non-empty rail. Will
+# tighten back once the history window naturally widens.
+MIN_SPECIFICITY_SCORE   = 2     # was 4 — allows month-precision dates alone to qualify
+EVENT_FRESHNESS_DAYS    = 30    # was 14 — admits month-old events
 EVENT_PARA_MAX_CHARS    = 2000  # truncate event_paragraph stored in current.json
 TOP_SAMPLE_KEEP         = 3000  # widened from 1000 — gives specificity gate filter surface
 
