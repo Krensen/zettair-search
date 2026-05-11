@@ -68,12 +68,12 @@ DENYLIST_PATH = Path(os.environ.get(
 # beating a 10000->30000 spike on a genuinely popular article (~1.1).
 # 500 compresses that gap.
 SMOOTHING               = 500
-# Minimum current views to qualify. En.wikipedia hourly traffic is in
-# the millions; "trending now" should mean the article is in roughly
-# the top few hundred globally for the sample hour. 3000 hourly views
-# is empirically about that threshold and filters out long-tail
-# regional / community-driven bursts that aren't broadly notable.
-MIN_VIEWS_NOW           = 3000
+# Minimum current views to qualify. En.wikipedia hourly traffic is
+# in the millions; below ~1000/hour is mostly long-tail noise from
+# non-English readers, communities briefly piling on, or botnets.
+# This is a coarse floor; the real bot/spike-shape filter lives
+# below (see "shape filter").
+MIN_VIEWS_NOW           = 1000
 # Minimum median baseline. An article that's normally invisible
 # (<50/hour median) doesn't deserve to be on the homepage even if it
 # spiked — too easy to game, too noisy.
@@ -83,6 +83,14 @@ MIN_SAMPLES_FOR_SPIKE   = 21    # ~7 days at 3-hourly cadence
 SPIKE_THRESHOLD         = math.log(2.0)   # >= 2x median to qualify
 RAIL_MIN                = 4     # if < this many spike, fall back to raw
 RAIL_MAX                = 50    # current.json caps at this many items
+
+# Shape filter — the previous sample must already be at least this
+# ratio above baseline. Real trending articles ramp over multiple
+# hours; bot pile-ons and community-of-the-hour effects show as a
+# single isolated spike. With samples at 3h intervals, requiring the
+# t-3h sample to be 1.3x baseline rejects "one hour and gone" bursts
+# while passing genuine multi-hour movement.
+SHAPE_PREV_MIN_RATIO    = 1.3
 
 # Dump URL template. {Y}/{Y-M}/pageviews-{YMD}-{HH}0000.gz
 DUMP_URL_TEMPLATE = (
@@ -379,13 +387,22 @@ def compute_current(history: list[dict], user_denyset: set[str]) -> dict:
         # In spike mode, apply qualifying floors. The spike threshold
         # alone lets long-tail sleepers (50 -> 5000 views) outrank
         # genuine giants growing (10000 -> 30000), so we also gate on
-        # absolute views and minimum baseline.
+        # absolute views, minimum baseline, and curve shape.
         if mode == "spike":
             if score is None or score < SPIKE_THRESHOLD:
                 continue
             if views < MIN_VIEWS_NOW:
                 continue
             if median_baseline is None or median_baseline <= MIN_MEDIAN_BASELINE:
+                continue
+            # Shape filter: the most recent prior sample must already
+            # be elevated. Bot bursts and community-of-the-hour effects
+            # show as a single isolated spike (prev ≈ baseline). Real
+            # trending articles ramp up over multiple hours so the
+            # previous 3-hour sample is already above baseline.
+            prev_views = hist[-1] if hist else 0
+            prev_ratio = (prev_views + SMOOTHING) / (median_baseline + SMOOTHING)
+            if prev_ratio < SHAPE_PREV_MIN_RATIO:
                 continue
 
         item = {
@@ -414,33 +431,11 @@ def compute_current(history: list[dict], user_denyset: set[str]) -> dict:
 
     if mode == "spike":
         items.sort(key=lambda r: r["score"], reverse=True)
-        # Back-fill rail if not enough qualifying spikers. Backfills
-        # still respect MIN_VIEWS_NOW so we don't surface obscure
-        # articles in a spike-mode rail just to fill it; an empty
-        # rail (homepage hides it) is better than a noisy one.
-        if len(items) < RAIL_MIN:
-            backfill = []
-            for rank, (title, views) in enumerate(latest["rows"], 1):
-                if is_denied(title, user_denyset):
-                    continue
-                if views < MIN_VIEWS_NOW:
-                    continue
-                query = title_to_query(title)
-                if query in seen_query:
-                    continue
-                backfill.append({
-                    "query": query,
-                    "title": title_to_display(title),
-                    "docno": title,
-                    "rank": rank,
-                    "views": views,
-                    "median_baseline": None,
-                    "score": None,
-                })
-                seen_query[query] = backfill[-1]
-                if len(items) + len(backfill) >= RAIL_MIN:
-                    break
-            items.extend(backfill)
+        # No back-fill. The whole point of the floors + shape filter
+        # is "only show real spikes". Padding the rail with raw
+        # top-views articles (which are by definition NOT spikes)
+        # would undo that. If too few articles qualify the rail is
+        # short — the homepage hides it cleanly when empty.
     else:
         items.sort(key=lambda r: r["views"], reverse=True)
 
