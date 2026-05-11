@@ -117,61 +117,111 @@
     }
 
     /* PRD-020: trending chip rail under the homepage search box.
-       Renders hidden until /api/trending returns; if the response is
-       empty (e.g. trending.json not yet written) the rail stays hidden.
-       Click a chip → navigates to /?q=<query> which the existing
-       bootstrap-from-URL code turns into a search. */
+       Hidden until /api/trending returns; if the response is empty
+       (e.g. trending.json not yet written) the rail stays hidden. */
+    @keyframes rail-in {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes chip-in {
+      from { opacity: 0; transform: translateY(6px) scale(0.96); }
+      to   { opacity: 1; transform: translateY(0)   scale(1); }
+    }
+
     .trending-rail {
       display: none;
-      flex-wrap: wrap;
-      gap: 0.4rem;
-      justify-content: center;
-      max-width: 584px;
-      margin: 1.25rem auto 0;
+      max-width: 680px;
+      margin: 1.75rem auto 0;
       padding: 0 1rem;
-      opacity: 0;
-      transition: opacity 320ms ease;
     }
     .trending-rail.ready {
+      display: block;
+      animation: rail-in 480ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+    }
+
+    /* Label + chips share one row on wide screens, stack on narrow. */
+    .trending-rail-inner {
       display: flex;
-      opacity: 1;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 0.45rem 0.55rem;
     }
+
     .trending-rail-label {
-      flex-basis: 100%;
-      text-align: center;
-      font-size: 0.7rem;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: #80868b;
-      margin-bottom: 0.1rem;
-    }
-    .trending-chip {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 6px 14px;
-      background: #f1f3f4;
-      border: 1px solid transparent;
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #1a73e8;
+      padding: 4px 10px 4px 8px;
+      background: #e8f0fe;
       border-radius: 999px;
-      color: #3c4043;
-      font-size: 0.82rem;
-      text-decoration: none;
-      transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+      flex-shrink: 0;
     }
+    .trending-rail-label svg {
+      width: 12px; height: 12px;
+      stroke: #1a73e8;
+      stroke-width: 2.2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .trending-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 14px 6px 12px;
+      background: #ffffff;
+      border: 1px solid #e5e7eb;
+      border-radius: 999px;
+      color: #202124;
+      font-size: 0.84rem;
+      font-weight: 500;
+      text-decoration: none;
+      box-shadow: 0 1px 2px rgba(60,64,67,0.04);
+      transition: background 160ms ease, border-color 160ms ease,
+                  transform 160ms ease, box-shadow 160ms ease;
+      animation: chip-in 360ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+    }
+    /* Stagger so each chip slides in slightly after the previous one. */
+    .trending-chip:nth-child(1) { animation-delay: 120ms; }
+    .trending-chip:nth-child(2) { animation-delay: 180ms; }
+    .trending-chip:nth-child(3) { animation-delay: 240ms; }
+    .trending-chip:nth-child(4) { animation-delay: 300ms; }
+    .trending-chip:nth-child(5) { animation-delay: 360ms; }
+    .trending-chip:nth-child(6) { animation-delay: 420ms; }
+    .trending-chip:nth-child(7) { animation-delay: 480ms; }
+    .trending-chip:nth-child(8) { animation-delay: 540ms; }
+
     .trending-chip:hover {
-      background: #e8eaed;
-      border-color: #dadce0;
+      background: #f8fafc;
+      border-color: #c0c4c9;
+      box-shadow: 0 2px 6px rgba(60,64,67,0.10);
+      transform: translateY(-1px);
     }
     .trending-chip:active {
-      transform: scale(0.97);
+      transform: translateY(0) scale(0.98);
     }
-    .trending-chip::before {
-      /* tiny spark icon prefix */
-      content: "";
-      width: 8px; height: 8px;
-      background: radial-gradient(circle at 30% 30%, #f9a825, #f26522);
-      border-radius: 50%;
+    .trending-chip svg {
+      width: 12px; height: 12px;
+      stroke: #1a73e8;
+      stroke-width: 2.2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
       flex-shrink: 0;
+    }
+    /* Reduced motion users get the same content, no cascade. */
+    @media (prefers-reduced-motion: reduce) {
+      .trending-rail.ready,
+      .trending-chip {
+        animation: none !important;
+      }
     }
 
     /* ── RESULTS PAGE ── */
@@ -1097,30 +1147,41 @@
   (function loadTrending() {
     const rail = document.getElementById('trendingRail');
     if (!rail) return;
-    // Defer to idle so the homepage paint isn't delayed.
+    // Inline SVGs — kept here rather than in the HTML so the rail can
+    // stay an empty container until data lands.
+    const TREND_ICON = '<svg viewBox="0 0 20 20" aria-hidden="true">' +
+      '<polyline points="3,14 8,9 11,12 17,5"/>' +
+      '<polyline points="12,5 17,5 17,10"/></svg>';
+    const SPARK_ICON = '<svg viewBox="0 0 20 20" aria-hidden="true">' +
+      '<path d="M10 3 L11.5 8 L17 9 L13 12.5 L14 18 L10 15 L6 18 L7 12.5 L3 9 L8.5 8 Z"/></svg>';
     const start = () => {
       fetch('/api/trending?n=8')
         .then(r => r.ok ? r.json() : null)
         .then(data => {
           if (!data || !Array.isArray(data.items) || data.items.length === 0) return;
-          const labelText = data.mode === 'spike' ? 'Trending now' : 'Popular now';
-          const chips = data.items.map(it => {
+          const isSpike = data.mode === 'spike';
+          const labelText = isSpike ? 'Trending' : 'Popular';
+          const labelIcon = isSpike ? TREND_ICON : SPARK_ICON;
+          const inner = document.createElement('div');
+          inner.className = 'trending-rail-inner';
+          const lbl = document.createElement('div');
+          lbl.className = 'trending-rail-label';
+          lbl.innerHTML = labelIcon + '<span>' + labelText + '</span>';
+          inner.appendChild(lbl);
+          data.items.forEach(it => {
             const a = document.createElement('a');
             a.className = 'trending-chip';
             a.href = '/?q=' + encodeURIComponent(it.query);
-            a.textContent = it.title;
+            a.innerHTML = TREND_ICON + '<span></span>';
+            a.querySelector('span').textContent = it.title;
             a.addEventListener('click', e => {
               e.preventDefault();
               doSearch(it.query);
             });
-            return a;
+            inner.appendChild(a);
           });
           rail.innerHTML = '';
-          const lbl = document.createElement('div');
-          lbl.className = 'trending-rail-label';
-          lbl.textContent = labelText;
-          rail.appendChild(lbl);
-          chips.forEach(c => rail.appendChild(c));
+          rail.appendChild(inner);
           rail.classList.add('ready');
         })
         .catch(() => { /* silent — rail stays hidden */ });
