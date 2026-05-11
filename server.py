@@ -625,10 +625,28 @@ async def image_proxy(url: str = Query(...)):
     """Proxy Wikimedia images to avoid browser-side rate limiting."""
     if not url.startswith("https://upload.wikimedia.org/"):
         return Response(status_code=403)
+    # urllib.request can't handle non-ASCII characters in URLs (it does
+    # not percent-encode them automatically). Wikimedia commons URLs
+    # frequently contain non-ASCII path segments — "Andrés_Iniesta",
+    # "FC_Barcelona_Femení", anything with diacritics. Percent-encode
+    # the path + query while leaving the scheme + host alone.
     try:
-        # Run blocking urllib call in a thread so the event loop isn't blocked
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "ZettairSearch/1.0 (https://zettair.io)",
+        parsed = urllib.parse.urlsplit(url)
+        safe_path = urllib.parse.quote(parsed.path, safe="/")
+        safe_query = urllib.parse.quote(parsed.query, safe="=&")
+        safe_url = urllib.parse.urlunsplit(
+            (parsed.scheme, parsed.netloc, safe_path, safe_query, "")
+        )
+    except Exception:
+        return Response(status_code=400)
+    try:
+        # Run blocking urllib call in a thread so the event loop isn't blocked.
+        # Wikimedia's anti-abuse layer 400s requests whose User-Agent doesn't
+        # include a contact (email or URL where they can reach the operator).
+        # Without it they return "Use thumbnail steps listed on …" — a
+        # misleading error that has nothing to do with the actual problem.
+        req = urllib.request.Request(safe_url, headers={
+            "User-Agent": "ZettairSearch/1.0 (https://zettair.io; hugh@viaaltoadvisors.com)",
             "Referer": "https://zettair.io/",
         })
         loop = asyncio.get_event_loop()
