@@ -1,0 +1,16 @@
+[Unit]
+Description=PRD-020 trending — fetch hourly pageview dump, score, write current.json
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=zettair
+WorkingDirectory=/opt/zettair-search
+ExecStart=/usr/bin/python3 /opt/zettair-search/tools/fetch_trending.py
+StandardOutput=journal
+StandardError=journal
+
+# A single fetch is small (~50 MB dump, ~5s of work). Cap memory so a
+# pathological day doesn't OOM the box.
+MemoryMax=512M

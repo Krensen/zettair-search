@@ -1,0 +1,15 @@
+[Unit]
+Description=PRD-020 trending timer — every 3 hours, 30 min after the hour
+
+[Timer]
+# Fire 3 min after boot to warm up, then every 3 hours.
+# The 3h cadence gives 8 samples/day, enough to detect within-day
+# spikes. The 30-min offset (handled via the dump's `latest_complete_hour`
+# logic, not the timer) is what lets us land after wikimedia has
+# published — the timer itself just fires every 3h on a fixed schedule.
+OnBootSec=3min
+OnUnitActiveSec=3h
+Unit=zettair-trending.service
+
+[Install]
+WantedBy=timers.target

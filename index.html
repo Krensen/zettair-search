@@ -116,6 +116,64 @@
       box-shadow: 0 1px 1px rgba(0,0,0,.1);
     }
 
+    /* PRD-020: trending chip rail under the homepage search box.
+       Renders hidden until /api/trending returns; if the response is
+       empty (e.g. trending.json not yet written) the rail stays hidden.
+       Click a chip → navigates to /?q=<query> which the existing
+       bootstrap-from-URL code turns into a search. */
+    .trending-rail {
+      display: none;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      justify-content: center;
+      max-width: 584px;
+      margin: 1.25rem auto 0;
+      padding: 0 1rem;
+      opacity: 0;
+      transition: opacity 320ms ease;
+    }
+    .trending-rail.ready {
+      display: flex;
+      opacity: 1;
+    }
+    .trending-rail-label {
+      flex-basis: 100%;
+      text-align: center;
+      font-size: 0.7rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #80868b;
+      margin-bottom: 0.1rem;
+    }
+    .trending-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      background: #f1f3f4;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      color: #3c4043;
+      font-size: 0.82rem;
+      text-decoration: none;
+      transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+    }
+    .trending-chip:hover {
+      background: #e8eaed;
+      border-color: #dadce0;
+    }
+    .trending-chip:active {
+      transform: scale(0.97);
+    }
+    .trending-chip::before {
+      /* tiny spark icon prefix */
+      content: "";
+      width: 8px; height: 8px;
+      background: radial-gradient(circle at 30% 30%, #f9a825, #f26522);
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
     /* ── RESULTS PAGE ── */
     #results-page { display: none; }
 
@@ -662,6 +720,7 @@
       <button type="submit">Zettair Search</button>
     </div>
   </form>
+  <div class="trending-rail" id="trendingRail" aria-label="Trending searches"></div>
 </div>
 
 <!-- RESULTS PAGE -->
@@ -1029,6 +1088,47 @@
       doSearch(q, /*fromHistory=*/ true);
     } else {
       history.replaceState({page: 'home'}, '', location.href);
+    }
+  })();
+
+  // PRD-020: trending chip rail. Fetches /api/trending after the page
+  // settles. Hidden by default; reveals only if the endpoint returns
+  // non-empty items. Click → ?q=<query> via doSearch (which pushState's).
+  (function loadTrending() {
+    const rail = document.getElementById('trendingRail');
+    if (!rail) return;
+    // Defer to idle so the homepage paint isn't delayed.
+    const start = () => {
+      fetch('/api/trending?n=8')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (!data || !Array.isArray(data.items) || data.items.length === 0) return;
+          const labelText = data.mode === 'spike' ? 'Trending now' : 'Popular now';
+          const chips = data.items.map(it => {
+            const a = document.createElement('a');
+            a.className = 'trending-chip';
+            a.href = '/?q=' + encodeURIComponent(it.query);
+            a.textContent = it.title;
+            a.addEventListener('click', e => {
+              e.preventDefault();
+              doSearch(it.query);
+            });
+            return a;
+          });
+          rail.innerHTML = '';
+          const lbl = document.createElement('div');
+          lbl.className = 'trending-rail-label';
+          lbl.textContent = labelText;
+          rail.appendChild(lbl);
+          chips.forEach(c => rail.appendChild(c));
+          rail.classList.add('ready');
+        })
+        .catch(() => { /* silent — rail stays hidden */ });
+    };
+    if ('requestIdleCallback' in window) {
+      requestIdleCallback(start, {timeout: 800});
+    } else {
+      setTimeout(start, 200);
     }
   })();
 

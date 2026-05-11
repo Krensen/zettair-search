@@ -52,10 +52,13 @@ requirements.txt   — Python deps: fastapi, uvicorn[standard]
 tools/
   summaries_admin.py        — Manage the PRD-018 summaries FlatStore (build/add/list/get/delete)
   seed_demo_summaries.sh    — Hand-feed a few demo summaries to prod
+  fetch_trending.py         — PRD-020 trending fetcher: pulls hourly pageview dumps, scores, writes current.json
+  trending_denylist.txt     — PRD-020 user denylist (case-insensitive substring matches against title)
 deploy/
   setup.sh                  — Single entry point: idempotent, staleness-aware. Pulls repos, rebuilds zet, reindexes, etc. Holds a flock so two runs can't race.
   deploy.sh                 — CI wrapper: git pull on zettair-search, then sudo bash setup.sh
   zettair-search.service    — systemd unit for the search service
+  zettair-trending.{service,timer} — PRD-020 trending fetcher, fires every 3h
 tests/
   test_setup.sh             — 20-scenario harness for the setup.sh staleness logic (DRY_RUN mode)
 .github/workflows/deploy.yml — GitHub Actions: SSH → deploy.sh on push to main
@@ -158,6 +161,7 @@ Configured in `deploy/zettair-search.service`. Values shown match what's deploye
 | `ZET_AUTOSUGGEST` | `…autosuggest.json` | Autosuggest sorted array |
 | `ZET_SUMMARIES_STORE` | `…summaries.store` | PRD-018 knowledge-panel summaries (keyed by normalised query string) |
 | `ZET_SUMMARIES_MAP` | `…summaries.map` | Summaries offset map |
+| `ZET_TRENDING_CURRENT` | `…trending/current.json` | PRD-020 trending chip-rail data (read by `/api/trending`) |
 
 ---
 
@@ -300,6 +304,54 @@ sudo -u zettair python3 /opt/zettair-search/tools/summaries_admin.py \
 
 ---
 
+## Trending pages (PRD-020)
+
+The homepage shows a small "Trending now" / "Popular now" chip rail under the search box. Click a chip to run that search. The chips refresh every 3 hours from Wikimedia's hourly pageview dumps.
+
+**Data flow:**
+
+```
+zettair-trending.timer (every 3h)
+  → tools/fetch_trending.py
+    • downloads pageviews-YYYYMMDD-HH0000.gz from dumps.wikimedia.org
+    • filters denylist (Special:, year pages, List_of_*, plus tools/trending_denylist.txt)
+    • normalises titles → search queries (strips parens, lowercases)
+    • appends sample to /mnt/wikipedia-source/trending/history.jsonl
+    • recomputes /mnt/wikipedia-source/trending/current.json with spike scores
+  → server.py /api/trending (reads current.json, mtime-cached)
+  → index.html homepage chip rail (loads on idle, hides if empty)
+```
+
+**Two modes, switches automatically:**
+
+- **`raw`** — for the first ~7 days after the timer starts, before there's enough per-article history to compute a spike. Chips ordered by raw view count, denylist-filtered. Label: "Popular now".
+- **`spike`** — once each article has ≥21 samples (~7 days at 3-hourly cadence), the scorer compares current views to the article's own 30-day median: `score = log((views + 100) / (median + 100))`. Articles below `log(2)` (less than 2× their baseline) drop. Label: "Trending now".
+
+The spike score is what stops perennials like Cleopatra and Hitler — they're always-popular, not trending. Mark Carney becoming PM is trending. The data shape is also designed so a future ranking-boost feature can read `current.json` directly without recomputation.
+
+**Manual ops:**
+
+```bash
+# Force a fetch outside the timer
+sudo -u zettair python3 /opt/zettair-search/tools/fetch_trending.py
+
+# Trim history.jsonl to last 30 days
+sudo -u zettair python3 /opt/zettair-search/tools/fetch_trending.py --compact
+
+# See what's currently on the rail
+curl -s https://zettair.io/api/trending | python3 -m json.tool
+
+# Logs
+sudo tail -n 50 /mnt/wikipedia-source/trending/fetch.log
+sudo journalctl -u zettair-trending.service -n 30
+```
+
+**Editing the denylist** (region-specific perennials, adult content, etc.):
+
+`tools/trending_denylist.txt` is plain text — one substring per line, case-insensitive partial match against the lowercased title (underscores → spaces). Structural junk (year articles, Special:, List_of_*) is regex-handled in `fetch_trending.py` and doesn't need to be in this file.
+
+---
+
 ## Troubleshooting
 
 **Service won't start / crashes:**
@@ -354,3 +406,4 @@ Design decisions are recorded in `prd/`. Reading order if you're new to the code
 | PRD-017 | Field-weighted BM25 — title boost via per-occurrence field-id | Live |
 | PRD-018 | Knowledge panel — offline-generated query summaries | M1+M2 live (server plumbing + frontend animations). M3-M6 (offline pipeline) TODO. |
 | PRD-019 | Per-field BM25 (BM25F) — separate length norm and weight per field, generalises to N fields | Live (M1+M2+M3 on prod). Folding sidecars into docmap is the only remaining TODO. |
+| PRD-020 | Trending pages — spiking signal from Wikipedia pageview dumps, homepage chip rail | M1-M3 in (fetcher + endpoint + chip rail). M4 spike-scoring activates automatically after ~7 days of samples. M6 (ranking boost) and M7 (Zeitgeist page) deferred to future PRDs. |

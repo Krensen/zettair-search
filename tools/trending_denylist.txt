@@ -1,0 +1,27 @@
+# PRD-020 trending-pages user denylist.
+#
+# One needle per line. Lines starting with `#` and blank lines are
+# ignored. Matching is case-insensitive substring match against the
+# normalised title (underscores replaced with spaces).
+#
+# Structural junk (year articles, Special:, List_of_*, etc.) is handled
+# by regex patterns inside fetch_trending.py and does not need to be
+# listed here. This file is for case-by-case exclusions:
+#
+#  • Adult / shock content we don't want on the homepage even when hot
+#  • Perennials that aren't structural but always rank
+#  • Region-specific Main_Page variants
+
+# Adult-content sublist — kept small and broad-strokes. Refine as needed.
+pornography
+sexual intercourse
+masturbation
+
+# Shock / extreme-violence pages that periodically spike but aren't
+# what we want on a friendly homepage.
+torture
+mass shooting
+serial killer
+
+# Region-specific Main_Page-style entries that occasionally appear.
+wikipedia, the free encyclopedia

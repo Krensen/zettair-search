@@ -102,6 +102,8 @@ AUTOSUGGEST_PATH    = os.environ.get("ZET_AUTOSUGGEST",    os.path.join(_wiki_di
 # PRD-018: knowledge-panel summaries. Keyed by query_norm, generated offline.
 SUMMARIES_STORE_PATH = os.environ.get("ZET_SUMMARIES_STORE", os.path.join(_wiki_dir, "summaries.store"))
 SUMMARIES_MAP_PATH   = os.environ.get("ZET_SUMMARIES_MAP",   os.path.join(_wiki_dir, "summaries.map"))
+# PRD-020: trending pages. Written by tools/fetch_trending.py on a timer.
+TRENDING_CURRENT_PATH = os.environ.get("ZET_TRENDING_CURRENT", "/mnt/wikipedia-source/trending/current.json")
 
 _autosuggest: list = []   # sorted list of (query, count) tuples
 
@@ -551,6 +553,46 @@ async def click(event: ClickEvent, request: Request):
         "local": is_local,
     }))
     return {"ok": True}
+
+
+# --- PRD-020: trending pages --------------------------------------------
+#
+# The fetcher writes current.json on a timer. We cache the parsed
+# payload in memory and only re-read when the file's mtime changes.
+# A missing file returns {"items": []} so the chip rail hides itself
+# rather than the homepage breaking.
+
+_trending_cache: dict = {"mtime": 0.0, "payload": {"mode": "raw", "items": []}}
+
+
+def _read_trending() -> dict:
+    try:
+        st = os.stat(TRENDING_CURRENT_PATH)
+    except FileNotFoundError:
+        return {"mode": "raw", "items": []}
+    if st.st_mtime != _trending_cache["mtime"]:
+        try:
+            with open(TRENDING_CURRENT_PATH, "rb") as f:
+                _trending_cache["payload"] = json.load(f)
+            _trending_cache["mtime"] = st.st_mtime
+        except (json.JSONDecodeError, OSError):
+            # Don't poison the cache on a transient bad read; return last good.
+            return _trending_cache["payload"]
+    return _trending_cache["payload"]
+
+
+@app.get("/api/trending")
+async def trending(n: int = Query(8, ge=1, le=50)):
+    """PRD-020: return the current trending list (chip-rail data)."""
+    payload = _read_trending()
+    items = payload.get("items", [])[:n]
+    # Project to just (query, title) — homepage doesn't need scores.
+    slim = [{"query": it["query"], "title": it["title"]} for it in items if it.get("query")]
+    return {
+        "mode": payload.get("mode", "raw"),
+        "generated_at": payload.get("generated_at"),
+        "items": slim,
+    }
 
 
 @app.get("/img")

@@ -597,6 +597,25 @@ for unit in zettair-summary-producer.service zettair-summary-producer.timer \
     fi
 done
 
+### ── 15c. PRD-020 trending dir + systemd timer (root) ─────────────────────
+
+TRENDING_DIR="$VOLUME/trending"
+if [ ! -d "$TRENDING_DIR" ]; then
+    decided trending-dir "missing"
+    as_zettair mkdir -p "$TRENDING_DIR"
+fi
+# Always re-set group + perms. Trending data is owned by zettair only;
+# no cross-group writes needed.
+dry chown -R "$SERVICE_USER:$SERVICE_USER" "$TRENDING_DIR"
+dry chmod -R 0755 "$TRENDING_DIR"
+
+decided trending-timer "always rsync"
+for unit in zettair-trending.service zettair-trending.timer; do
+    if [ -f "$SEARCH_DIR/deploy/$unit" ]; then
+        dry cp "$SEARCH_DIR/deploy/$unit" /etc/systemd/system/
+    fi
+done
+
 # Sudoers entry so the installer (runs as zettair) can restart the
 # search service when new summaries land. Narrow allowlist.
 SUDOERS_FILE=/etc/sudoers.d/zettair-installer
@@ -629,6 +648,9 @@ if [ -f /etc/systemd/system/zettair-summary-producer.timer ]; then
 fi
 if [ -f /etc/systemd/system/zettair-summary-installer.timer ]; then
     dry systemctl enable --now zettair-summary-installer.timer
+fi
+if [ -f /etc/systemd/system/zettair-trending.timer ]; then
+    dry systemctl enable --now zettair-trending.timer
 fi
 
 ### ── 17. Verify ownership (loud failure if anything is misowned) ───────────
