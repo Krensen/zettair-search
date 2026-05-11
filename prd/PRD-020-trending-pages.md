@@ -298,16 +298,31 @@ Returns:
   "mode": "spike",
   "generated_at": "2026-05-10T12:34:56Z",
   "items": [
-    {"query": "mark carney", "title": "Mark Carney"},
-    {"query": "australian election 2026", "title": "2026 Australian federal election"},
+    {"query": "mark carney", "title": "Mark Carney", "in_index": true},
+    {"query": "pope leo xiv", "title": "Pope Leo XIV", "in_index": false,
+     "wiki_url": "https://en.wikipedia.org/wiki/Pope_Leo_XIV"},
     ...
   ]
 }
 ```
 
-The server-side endpoint reads `current.json` and projects to just
-`{query, title}` for the rail — the homepage doesn't need scores. mtime
-cache: re-read the file only when its mtime changes.
+The server-side endpoint reads `current.json`, joins each item's
+`docno` against the in-memory docstore map, and adds:
+
+- `in_index: true` if our 1.5M-corpus has the article → chip behaves
+  as a search query.
+- `in_index: false` + `wiki_url` if not → chip is a direct link to
+  en.wikipedia.org in a new tab, with a different (external-link)
+  icon and muted styling.
+
+This avoids the failure mode where a trending article (e.g. a freshly
+created Wikipedia page) routes to an empty results page. The join is
+exact-match on the raw url-form title against the docstore's key set;
+no fuzzy logic, no redirect resolution (Wikimedia pre-resolves
+redirects in the pageview dumps).
+
+mtime cache: re-read `current.json` only when its mtime changes. The
+docstore map is loaded once at server start.
 
 If `current.json` doesn't exist, return `{"items": []}` and the chip
 rail simply doesn't render. The homepage degrades silently — never

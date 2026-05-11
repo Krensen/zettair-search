@@ -583,15 +583,33 @@ def _read_trending() -> dict:
 
 @app.get("/api/trending")
 async def trending(n: int = Query(8, ge=1, le=50)):
-    """PRD-020: return the current trending list (chip-rail data)."""
+    """PRD-020: return the current trending list (chip-rail data).
+
+    For each trending article we check whether its docno is in our
+    corpus. If yes the chip behaves as a search query; if no it's a
+    direct link to en.wikipedia.org so the user still gets to the
+    article. Two visual styles on the frontend, one data flow here.
+    """
     payload = _read_trending()
     items = payload.get("items", [])[:n]
-    # Project to just (query, title) — homepage doesn't need scores.
-    slim = [{"query": it["query"], "title": it["title"]} for it in items if it.get("query")]
+    out = []
+    for it in items:
+        if not it.get("query"):
+            continue
+        docno = it.get("docno")
+        in_index = bool(docno) and docno in _docstore._map
+        entry = {
+            "query": it["query"],
+            "title": it["title"],
+            "in_index": in_index,
+        }
+        if not in_index and docno:
+            entry["wiki_url"] = f"https://en.wikipedia.org/wiki/{docno}"
+        out.append(entry)
     return {
         "mode": payload.get("mode", "raw"),
         "generated_at": payload.get("generated_at"),
-        "items": slim,
+        "items": out,
     }
 
 

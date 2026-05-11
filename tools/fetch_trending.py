@@ -369,6 +369,7 @@ def compute_current(history: list[dict], user_denyset: set[str]) -> dict:
         item = {
             "query": query,
             "title": title_to_display(title),
+            "docno": title,    # raw URL-form, used to join against the docmap server-side
             "rank": rank,
             "views": views,
             "median_baseline": median_baseline,
@@ -403,6 +404,7 @@ def compute_current(history: list[dict], user_denyset: set[str]) -> dict:
                 backfill.append({
                     "query": query,
                     "title": title_to_display(title),
+                    "docno": title,
                     "rank": rank,
                     "views": views,
                     "median_baseline": None,
