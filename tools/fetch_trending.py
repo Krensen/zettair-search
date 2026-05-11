@@ -186,12 +186,30 @@ def title_to_display(title: str) -> str:
 # -- dump fetch + parse -----------------------------------------------------
 
 def latest_complete_hour() -> dt.datetime:
-    """Return the most recent hour whose pageview dump is likely
-    published. Wikimedia publishes ~30-90 min after the hour ends.
-    To be safe we target the hour that ended >= 90 min ago."""
+    """Return the hour we'll attempt first. Wikimedia's publishing lag
+    is empirically 2-3 hours from the end of the hour; we aim for an
+    hour that ended ~2.5h ago. If that dump 404s, the caller walks
+    backwards through earlier hours."""
     now = dt.datetime.now(dt.UTC)
-    target = (now - dt.timedelta(minutes=90)).replace(minute=0, second=0, microsecond=0)
+    target = (now - dt.timedelta(minutes=150)).replace(minute=0, second=0, microsecond=0)
     return target
+
+
+def fetch_latest_available(max_lookback_hours: int = 12) -> tuple[dt.datetime, dict[str, int]] | None:
+    """Try the latest hour; on 404 walk back hour-by-hour until we find
+    a published dump. Returns (hour, counts) or None if nothing in the
+    last `max_lookback_hours` is available — extremely unlikely unless
+    dumps.wikimedia.org is down."""
+    start = latest_complete_hour()
+    for h in range(max_lookback_hours):
+        hour = start - dt.timedelta(hours=h)
+        if already_have(hour):
+            log(f"already have sample for {hour.isoformat()}, walking further back")
+            continue
+        counts = fetch_dump(hour)
+        if counts:
+            return hour, counts
+    return None
 
 
 def fetch_dump(hour: dt.datetime) -> dict[str, int]:
@@ -457,22 +475,13 @@ def main() -> None:
         compact()
         return
 
-    hour = latest_complete_hour()
-    if already_have(hour):
-        log(f"already have sample for {hour.isoformat()}, recomputing current.json only")
-        history = read_history()
-        denyset = load_user_denylist()
-        payload = compute_current(history, denyset)
-        write_current(payload)
-        log(f"recomputed: mode={payload['mode']} items={len(payload['items'])}")
+    result = fetch_latest_available()
+    if result is None:
+        # Nothing available in the last 12h. Don't touch current.json;
+        # leave whatever's there for the homepage to keep serving.
+        log("no dump available in the last 12h — exiting cleanly")
         return
-
-    counts = fetch_dump(hour)
-    if not counts:
-        # Dump not yet published. Don't append anything; just leave the
-        # existing current.json alone. Next timer fire will retry.
-        log("no dump yet — exiting cleanly")
-        return
+    hour, counts = result
 
     # Keep top 1000 per sample to keep history.jsonl small.
     top_titles = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:1000]
