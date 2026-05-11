@@ -62,7 +62,21 @@ DENYLIST_PATH = Path(os.environ.get(
 ))
 
 # Spike scoring constants. See PRD-020 for derivation.
-SMOOTHING               = 100   # additive smoothing so 0->50 spikes don't blow up
+# SMOOTHING bumped 100 -> 500 after early prod data was dominated by
+# long-tail sleeper articles (Tamil politicians, regional places).
+# With smoothing 100 a 50-views article jumping to 5000 scored ~3.5,
+# beating a 10000->30000 spike on a genuinely popular article (~1.1).
+# 500 compresses that gap.
+SMOOTHING               = 500
+# Minimum current views to qualify. En.wikipedia hourly traffic is in
+# the millions; a real "trending now" article gets >=1000 views in
+# the sample hour. Below that is noise from non-English readers or
+# botnets briefly poking an obscure article.
+MIN_VIEWS_NOW           = 1000
+# Minimum median baseline. An article that's normally invisible
+# (<50/hour median) doesn't deserve to be on the homepage even if it
+# spiked — too easy to game, too noisy.
+MIN_MEDIAN_BASELINE     = 50
 HISTORY_WINDOW_DAYS     = 30
 MIN_SAMPLES_FOR_SPIKE   = 21    # ~7 days at 3-hourly cadence
 SPIKE_THRESHOLD         = math.log(2.0)   # >= 2x median to qualify
@@ -361,10 +375,17 @@ def compute_current(history: list[dict], user_denyset: set[str]) -> dict:
         else:
             score = None   # not enough history to spike-score
 
-        # In spike mode, drop items below threshold here. In raw mode,
-        # keep all (score=None).
-        if mode == "spike" and (score is None or score < SPIKE_THRESHOLD):
-            continue
+        # In spike mode, apply qualifying floors. The spike threshold
+        # alone lets long-tail sleepers (50 -> 5000 views) outrank
+        # genuine giants growing (10000 -> 30000), so we also gate on
+        # absolute views and minimum baseline.
+        if mode == "spike":
+            if score is None or score < SPIKE_THRESHOLD:
+                continue
+            if views < MIN_VIEWS_NOW:
+                continue
+            if median_baseline is None or median_baseline <= MIN_MEDIAN_BASELINE:
+                continue
 
         item = {
             "query": query,
@@ -392,11 +413,16 @@ def compute_current(history: list[dict], user_denyset: set[str]) -> dict:
 
     if mode == "spike":
         items.sort(key=lambda r: r["score"], reverse=True)
-        # Back-fill rail if not enough qualifying spikers
+        # Back-fill rail if not enough qualifying spikers. Backfills
+        # still respect MIN_VIEWS_NOW so we don't surface obscure
+        # articles in a spike-mode rail just to fill it; an empty
+        # rail (homepage hides it) is better than a noisy one.
         if len(items) < RAIL_MIN:
             backfill = []
             for rank, (title, views) in enumerate(latest["rows"], 1):
                 if is_denied(title, user_denyset):
+                    continue
+                if views < MIN_VIEWS_NOW:
                     continue
                 query = title_to_query(title)
                 if query in seen_query:
