@@ -52,8 +52,10 @@ requirements.txt   — Python deps: fastapi, uvicorn[standard]
 tools/
   summaries_admin.py        — Manage the PRD-018 summaries FlatStore (build/add/list/get/delete)
   seed_demo_summaries.sh    — Hand-feed a few demo summaries to prod
-  fetch_trending.py         — PRD-020 trending fetcher: pulls hourly pageview dumps, scores, writes current.json
+  fetch_trending.py         — PRD-020 trending fetcher: pulls hourly pageview dumps, scores, writes current.json. PRD-021 adds the article-specificity gate.
   trending_denylist.txt     — PRD-020 user denylist (case-insensitive substring matches against title)
+  build_news_summary_jobs.py — PRD-021 producer: reads current.json, enqueues :news jobs for the Mac Mini
+  compact_news_summaries.py — PRD-021 weekly compaction: drop :news entries whose subject hasn't trended recently
 deploy/
   setup.sh                  — Single entry point: idempotent, staleness-aware. Pulls repos, rebuilds zet, reindexes, etc. Holds a flock so two runs can't race.
   deploy.sh                 — CI wrapper: git pull on zettair-search, then sudo bash setup.sh
@@ -331,6 +333,8 @@ The spike score is what stops perennials like Cleopatra and Hitler — they're a
 
 **In-index vs external chips.** `/api/trending` joins each item's docno against our docstore. Articles we have in the corpus get an `in_index: true` chip that triggers a search; articles we don't (e.g. very fresh pages not in the 1.5M cut) get an `in_index: false` chip with a different icon that links directly to en.wikipedia.org. This avoids the failure mode where a trending article routes to an empty results page.
 
+**Article-specificity gate (PRD-021).** After the pageview-shape filters, each candidate's Wikipedia article is fetched via the REST API and scored for "recent dated event" paragraphs (day-precision dates within the last 14 days). Articles without a qualifying paragraph drop off the rail entirely — this is the same signal that decides whether we have content for a news-flavoured knowledge-panel summary, and it doubles as a strong noise filter (community pile-ons on Wikipedia articles editors haven't touched fall off automatically). `event_paragraph` + `event_date` are persisted into `current.json` so downstream consumers don't need a second API fetch.
+
 **Trending feeds the next corpus rebuild.** `select_top_articles.py` reads `/mnt/wikipedia-source/trending/history.jsonl` and union-s every title that has ever appeared in a sample on top of the top-N clickstream cut. So next time the index is rebuilt (new enwiki dump, fresh TREC), every article that's been popular since the last rebuild is in the corpus by construction. The corpus grows by however many trending-only titles have accumulated (typically tens of thousands over a 30-day window); the README still loosely says "1.5M" but the actual number creeps up after each rebuild. `setup.sh` only regenerates `top_titles.txt` when it's missing — to force a refresh that picks up new trending titles, `sudo rm /mnt/wikipedia-source/top_titles.txt` and re-run setup.sh. (Auto-trigger on every CI deploy was tried briefly but made deploys take 20+ min reading the monthly clickstream files; not worth it for a 4-8h downstream rebuild that's gated separately.)
 
 **Manual ops:**
@@ -417,3 +421,4 @@ Design decisions are recorded in `prd/`. Reading order if you're new to the code
 | PRD-018 | Knowledge panel — offline-generated query summaries | M1+M2 live (server plumbing + frontend animations). M3-M6 (offline pipeline) TODO. |
 | PRD-019 | Per-field BM25 (BM25F) — separate length norm and weight per field, generalises to N fields | Live (M1+M2+M3 on prod). Folding sidecars into docmap is the only remaining TODO. |
 | PRD-020 | Trending pages — spiking signal from Wikipedia pageview dumps, homepage chip rail | M1-M3 in (fetcher + endpoint + chip rail). M4 spike-scoring activates automatically after ~7 days of samples. M6 (ranking boost) and M7 (Zeitgeist page) deferred to future PRDs. |
+| PRD-021 | News-spike summaries — when a query is trending, knowledge panel explains why via a Wikipedia-grounded news summary. Article-specificity gate doubles as the trending rail's quality filter. | M1-M4 in (specificity gate + news producer + server serving + weekly compaction). |

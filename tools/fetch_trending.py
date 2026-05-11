@@ -82,7 +82,7 @@ HISTORY_WINDOW_DAYS     = 30
 MIN_SAMPLES_FOR_SPIKE   = 21    # ~7 days at 3-hourly cadence
 SPIKE_THRESHOLD         = math.log(2.0)   # >= 2x median to qualify
 RAIL_MIN                = 4     # if < this many spike, fall back to raw
-RAIL_MAX                = 50    # current.json caps at this many items
+RAIL_MAX                = 12    # PRD-021: aim for 6-12 chips after specificity gate
 
 # Shape filter — the previous sample must already be at least this
 # ratio above baseline. Real trending articles ramp over multiple
@@ -92,6 +92,18 @@ RAIL_MAX                = 50    # current.json caps at this many items
 # ratio ~1.0) but lets early-ramp stories through where the previous
 # sample is only modestly elevated.
 SHAPE_PREV_MIN_RATIO    = 1.15
+
+# -- PRD-021: article-specificity gate --------------------------------------
+# Each pageview-shape-qualifying candidate is enriched by fetching its
+# Wikipedia article and finding the highest-scoring "recent dated event"
+# paragraph. Candidates without a qualifying paragraph fall off the rail.
+WIKI_API_URL            = "https://en.wikipedia.org/w/api.php"
+MAX_CANDIDATES_TO_GATE  = 50    # cap API fan-out per fetch
+MIN_PARA_LEN            = 120   # chars; below this is too short to be a real event para
+MIN_SPECIFICITY_SCORE   = 4     # at least one day-precision date OR two month-precision
+EVENT_FRESHNESS_DAYS    = 14    # most recent date in para must be within this many days
+EVENT_PARA_MAX_CHARS    = 2000  # truncate event_paragraph stored in current.json
+TOP_SAMPLE_KEEP         = 3000  # widened from 1000 — gives specificity gate filter surface
 
 # Dump URL template. {Y}/{Y-M}/pageviews-{YMD}-{HH}0000.gz
 DUMP_URL_TEMPLATE = (
@@ -462,6 +474,208 @@ def write_current(payload: dict) -> None:
     os.replace(tmp, CURRENT_PATH)
 
 
+# -- PRD-021: article-specificity gate --------------------------------------
+
+# Date-format regexes. Day-precision scores 4, month 2, bare year 1.
+# Validated on Tristan da Cunha (matches "9 May 2026") and Mark Carney
+# (matches multiple "2025"/"2026"/"January 2026" dates) during PRD design.
+_DAY_DM_RE  = re.compile(r"\b(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(202[0-9])\b")
+_DAY_MD_RE  = re.compile(r"\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(202[0-9])\b")
+_MONTH_RE   = re.compile(r"\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(202[0-9])\b")
+_YEAR_RE    = re.compile(r"\b(202[0-9])\b")
+
+_MONTH_TO_NUM = {m: i for i, m in enumerate(
+    ["January","February","March","April","May","June","July","August","September","October","November","December"], 1)}
+
+
+def _strip_wikitext(s: str) -> str:
+    """Quick-and-dirty wikitext -> plain text. Handles templates, refs,
+    links, bold/italic, files/categories. Good enough for paragraph
+    extraction; not aiming for perfect rendering."""
+    # Strip templates (nested up to 3 levels)
+    for _ in range(3):
+        s = re.sub(r'\{\{[^{}]*\}\}', '', s)
+    s = re.sub(r'<ref[^>]*>.*?</ref>', '', s, flags=re.S)
+    s = re.sub(r'<ref[^>]*/>', '', s)
+    s = re.sub(r'<!--.*?-->', '', s, flags=re.S)
+    s = re.sub(r'\[\[(?:File|Image|Category):[^\]]*\]\]', '', s)
+    s = re.sub(r'\[\[([^|\]]+)\|([^\]]+)\]\]', r'\2', s)
+    s = re.sub(r'\[\[([^\]]+)\]\]', r'\1', s)
+    s = re.sub(r"'''([^']+)'''", r'\1', s)
+    s = re.sub(r"''([^']+)''", r'\1', s)
+    s = re.sub(r'\n{3,}', '\n\n', s)
+    return s.strip()
+
+
+def _latest_date_in(text: str) -> dt.date | None:
+    """Find the most-recent date referenced in text, preferring more-
+    precise formats. Day-precision dates take priority; if none, fall
+    back to month-precision; if none, year-only. Returns None if no
+    recognisable 202x date is present.
+
+    The precision hierarchy prevents "9 May 2026" from being dragged
+    forward to "2026-07-01" by a bare-year "2026" mention elsewhere in
+    the same paragraph."""
+    day_candidates: list[dt.date] = []
+    for m in _DAY_DM_RE.finditer(text):
+        day, month, year = int(m.group(1)), _MONTH_TO_NUM[m.group(2)], int(m.group(3))
+        try:
+            day_candidates.append(dt.date(year, month, day))
+        except ValueError:
+            pass
+    for m in _DAY_MD_RE.finditer(text):
+        month, day, year = _MONTH_TO_NUM[m.group(1)], int(m.group(2)), int(m.group(3))
+        try:
+            day_candidates.append(dt.date(year, month, day))
+        except ValueError:
+            pass
+    if day_candidates:
+        return max(day_candidates)
+    month_candidates: list[dt.date] = []
+    for m in _MONTH_RE.finditer(text):
+        month, year = _MONTH_TO_NUM[m.group(1)], int(m.group(2))
+        try:
+            month_candidates.append(dt.date(year, month, 15))
+        except ValueError:
+            pass
+    if month_candidates:
+        return max(month_candidates)
+    year_candidates: list[dt.date] = []
+    for m in _YEAR_RE.finditer(text):
+        try:
+            year_candidates.append(dt.date(int(m.group(1)), 7, 1))
+        except ValueError:
+            pass
+    return max(year_candidates) if year_candidates else None
+
+
+def _specificity_score(text: str) -> int:
+    """Score a paragraph by date-format precision. Day > month > year."""
+    s = 0
+    s += 4 * len(_DAY_DM_RE.findall(text))
+    s += 4 * len(_DAY_MD_RE.findall(text))
+    s += 2 * len(_MONTH_RE.findall(text))
+    s += 1 * len(_YEAR_RE.findall(text))
+    return s
+
+
+def fetch_article_wikitext(docno: str) -> str | None:
+    """Fetch the article's wikitext via the Wikipedia API. Returns None
+    on any error (rate limit, missing article, network)."""
+    params = {
+        "action": "parse",
+        "page": docno,
+        "prop": "wikitext",
+        "format": "json",
+    }
+    url = WIKI_API_URL + "?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            d = json.loads(resp.read())
+    except (urllib.error.URLError, ValueError, json.JSONDecodeError):
+        return None
+    parse = d.get("parse") or {}
+    wt = (parse.get("wikitext") or {}).get("*")
+    return wt
+
+
+def find_event_paragraph(wikitext: str, today: dt.date) -> dict | None:
+    """Return the highest-scoring recent-event paragraph, or None.
+
+    Returns dict with: paragraph (str), specificity (int), event_date (str ISO).
+    """
+    plain = _strip_wikitext(wikitext)
+    best: tuple[int, str, dt.date] | None = None
+    for p in plain.split("\n\n"):
+        p = p.strip()
+        if len(p) < MIN_PARA_LEN:
+            continue
+        if p.startswith(("=", "|", "*", "{", "}")):
+            continue
+        score = _specificity_score(p)
+        if score < MIN_SPECIFICITY_SCORE:
+            continue
+        latest = _latest_date_in(p)
+        if latest is None:
+            continue
+        age_days = (today - latest).days
+        # Reject if the latest dated mention is older than the freshness
+        # window or in the future. Future-dated paragraphs are usually
+        # biographical mentions of scheduled events (election dates,
+        # birthdays); we want events that have actually happened.
+        if age_days > EVENT_FRESHNESS_DAYS or age_days < 0:
+            continue
+        if best is None or score > best[0]:
+            best = (score, p, latest)
+    if best is None:
+        return None
+    score, para, event_date = best
+    if len(para) > EVENT_PARA_MAX_CHARS:
+        para = para[:EVENT_PARA_MAX_CHARS].rsplit(" ", 1)[0] + "…"
+    return {
+        "paragraph": para,
+        "specificity": score,
+        "event_date": event_date.isoformat(),
+    }
+
+
+def apply_specificity_gate(items: list[dict]) -> list[dict]:
+    """For each item, fetch its Wikipedia article and look for a recent
+    dated event paragraph. Drop items that fail. Items that pass gain
+    event_paragraph / event_date / event_specificity fields.
+
+    Operates in input order (already sorted by spike score). Caps at
+    MAX_CANDIDATES_TO_GATE so API fan-out stays bounded."""
+    today = dt.datetime.now(dt.UTC).date()
+    kept = []
+    n_checked = 0
+    n_dropped_no_para = 0
+    n_dropped_fetch = 0
+    for it in items[:MAX_CANDIDATES_TO_GATE]:
+        n_checked += 1
+        docno = it.get("docno") or it.get("title", "").replace(" ", "_")
+        if not docno:
+            n_dropped_no_para += 1
+            continue
+        wt = fetch_article_wikitext(docno)
+        if wt is None:
+            n_dropped_fetch += 1
+            continue
+        ev = find_event_paragraph(wt, today)
+        if ev is None:
+            n_dropped_no_para += 1
+            continue
+        it["event_paragraph"]   = ev["paragraph"]
+        it["event_date"]        = ev["event_date"]
+        it["event_specificity"] = ev["specificity"]
+        kept.append(it)
+        if len(kept) >= RAIL_MAX:
+            break
+    return kept, {
+        "checked": n_checked,
+        "dropped_no_para": n_dropped_no_para,
+        "dropped_fetch": n_dropped_fetch,
+        "kept": len(kept),
+    }
+
+
+def recompute_and_write() -> None:
+    """Recompute current.json from history + apply specificity gate."""
+    history = read_history()
+    denyset = load_user_denylist()
+    payload = compute_current(history, denyset)
+    log(f"pre-gate: mode={payload['mode']} items={len(payload['items'])}")
+    if payload["mode"] == "spike" and payload["items"]:
+        kept, stats = apply_specificity_gate(payload["items"])
+        log(f"specificity gate: checked={stats['checked']} "
+            f"kept={stats['kept']} dropped_no_para={stats['dropped_no_para']} "
+            f"dropped_fetch={stats['dropped_fetch']}")
+        payload["items"] = kept
+    write_current(payload)
+    log(f"wrote current.json: mode={payload['mode']} items={len(payload['items'])}")
+
+
 # -- compaction -------------------------------------------------------------
 
 def compact() -> None:
@@ -527,7 +741,7 @@ def bootstrap(days: int, step_hours: int = 3) -> None:
             log(f"  no dump for {hour.isoformat()}")
             failed += 1
             continue
-        top_titles = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:1000]
+        top_titles = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:TOP_SAMPLE_KEEP]
         append_history(hour, top_titles)
         pulled += 1
         log(f"  [{pulled}/{n_steps}] appended {hour.isoformat()} "
@@ -536,11 +750,7 @@ def bootstrap(days: int, step_hours: int = 3) -> None:
     log(f"bootstrap done: pulled={pulled} skipped={skipped} failed={failed}")
 
     if pulled:
-        history = read_history()
-        denyset = load_user_denylist()
-        payload = compute_current(history, denyset)
-        write_current(payload)
-        log(f"wrote current.json: mode={payload['mode']} items={len(payload['items'])}")
+        recompute_and_write()
 
 
 def main() -> None:
@@ -569,15 +779,11 @@ def main() -> None:
     hour, counts = result
 
     # Keep top 1000 per sample to keep history.jsonl small.
-    top_titles = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:1000]
+    top_titles = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:TOP_SAMPLE_KEEP]
     append_history(hour, top_titles)
     log(f"appended sample for {hour.isoformat()} with {len(top_titles)} titles")
 
-    history = read_history()
-    denyset = load_user_denylist()
-    payload = compute_current(history, denyset)
-    write_current(payload)
-    log(f"wrote current.json: mode={payload['mode']} items={len(payload['items'])}")
+    recompute_and_write()
 
 
 if __name__ == "__main__":

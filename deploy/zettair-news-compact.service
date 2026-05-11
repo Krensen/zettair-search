@@ -1,0 +1,11 @@
+[Unit]
+Description=PRD-021 weekly compaction — drop stale :news entries from summaries.map
+
+[Service]
+Type=oneshot
+User=zettair
+WorkingDirectory=/opt/zettair-search
+ExecStart=/usr/bin/python3 /opt/zettair-search/tools/compact_news_summaries.py
+StandardOutput=journal
+StandardError=journal
+MemoryMax=256M

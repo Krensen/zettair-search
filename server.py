@@ -517,7 +517,25 @@ async def search(
 
     # PRD-018: knowledge-panel summary. Lookup is keyed by normalised
     # query (lowercase + collapsed whitespace). Missing → field absent.
-    summary = _summaries_store.get(query_norm(q))
+    # PRD-021: if the query is currently spiking AND we have a news
+    # summary for it, prefer that. Falls through to biographical
+    # otherwise. summary_kind tells the frontend which badge to render.
+    qn = query_norm(q)
+    summary = None
+    summary_kind = None
+    event_date = None
+    spike_meta = _trending_spike_meta(qn)
+    if spike_meta is not None:
+        news = _summaries_store.get(f"{qn}:news")
+        if news:
+            summary = news
+            summary_kind = "news"
+            event_date = spike_meta.get("event_date")
+    if summary is None:
+        bio = _summaries_store.get(qn)
+        if bio:
+            summary = bio
+            summary_kind = "biographical"
 
     response = {
         "query": q,
@@ -529,6 +547,9 @@ async def search(
     }
     if summary:
         response["summary"] = summary
+        response["summary_kind"] = summary_kind
+        if event_date:
+            response["event_date"] = event_date
     return response
 
 
@@ -579,6 +600,37 @@ def _read_trending() -> dict:
             # Don't poison the cache on a transient bad read; return last good.
             return _trending_cache["payload"]
     return _trending_cache["payload"]
+
+
+# PRD-021: don't serve a news summary whose paragraph is older than
+# this. Independent of NEWS_REFRESH_HOURS (which is producer-side); the
+# server enforces "the news must still be recent" even if we couldn't
+# refresh in time.
+STALE_NEWS_DAYS_SERVE = 14
+
+
+def _trending_spike_meta(query_norm_str: str) -> dict | None:
+    """Return the trending item (with event_date / event_paragraph) if
+    the query is currently spiking AND the event is still fresh.
+    Otherwise None — caller falls through to biographical summary."""
+    payload = _read_trending()
+    if payload.get("mode") != "spike":
+        return None
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+    for it in payload.get("items", []):
+        if it.get("query", "").strip().lower() != query_norm_str:
+            continue
+        ed = it.get("event_date")
+        if not ed:
+            return it  # spike present but no event_date — serve as-is
+        try:
+            event_date = datetime.date.fromisoformat(ed)
+        except ValueError:
+            return None
+        if (today - event_date).days > STALE_NEWS_DAYS_SERVE:
+            return None  # event too old; fall through to biographical
+        return it
+    return None
 
 
 @app.get("/api/trending")

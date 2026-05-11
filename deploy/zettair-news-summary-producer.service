@@ -1,0 +1,16 @@
+[Unit]
+Description=PRD-021 news-spike summary producer — enqueue jobs for trending articles
+After=zettair-search.service
+Requires=zettair-search.service
+
+[Service]
+Type=oneshot
+User=zettair
+WorkingDirectory=/opt/zettair-search
+ExecStart=/usr/bin/python3 /opt/zettair-search/tools/build_news_summary_jobs.py
+StandardOutput=journal
+StandardError=journal
+
+# Reads trending/current.json and writes to summaries/pending/.
+# Cheap work — no Wikipedia API calls (that happened in the trending
+# fetch). At most a few dozen file writes.

@@ -1,0 +1,15 @@
+[Unit]
+Description=PRD-021 news-spike summary producer timer — every 3h, offset from trending
+
+[Timer]
+# 30 min after boot (give the trending fetch a chance to land first
+# after a reboot), then every 3h. Designed to fire ~30 min AFTER each
+# zettair-trending run so current.json has fresh event_paragraph data
+# to feed the producer.
+OnBootSec=30min
+OnUnitActiveSec=3h
+Unit=zettair-news-summary-producer.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

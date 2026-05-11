@@ -461,6 +461,20 @@
       background: #1a73e8;
       animation: kp-pulse 1.4s ease-in-out infinite;
     }
+    /* PRD-021: news-summary variant — distinct accent so users can
+       tell at a glance "this is current news, not biography". */
+    .kp-summary-badge.news {
+      color: #b35900;
+      background: #fff4e5;
+    }
+    .kp-summary-badge.news::before {
+      background: #e8222a;
+    }
+    .kp-event-date {
+      font-size: 0.72rem;
+      color: #80868b;
+      margin: -0.35rem 0 0.5rem;
+    }
 
     .kp-summary {
       font-size: 0.9rem;
@@ -919,8 +933,15 @@
                 onerror="this.style.display='none'">`
         : '';
       const hasSummary = typeof data.summary === 'string' && data.summary.trim().length > 0;
+      // PRD-021: news summaries get a different "In the news" badge
+      // (vs the standard "Summary" badge) and an as-of dated stamp.
+      const isNewsSummary = data.summary_kind === 'news';
+      const badgeText  = isNewsSummary ? 'In the news' : 'Summary';
+      const badgeClass = isNewsSummary ? 'kp-summary-badge news' : 'kp-summary-badge';
+      const eventDateLabel = isNewsSummary && data.event_date
+        ? `<div class="kp-event-date">as of ${esc(data.event_date)}</div>` : '';
       const skeletonHtml = `
-        <div class="kp-summary-badge">Summary</div>
+        <div class="${badgeClass}">${badgeText}</div>
         <div class="kp-skeleton" id="kpSkeleton" aria-busy="true" aria-label="Generating summary">
           <div class="line w95"></div>
           <div class="line w95"></div>
@@ -970,7 +991,8 @@
               '<path d="M5.5 7.5L10 12l4.5-4.5" stroke="currentColor" stroke-width="2" ' +
               'stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>';
             bodyEl.innerHTML =
-              '<div class="kp-summary-badge">Summary</div>' +
+              '<div class="' + badgeClass + '">' + badgeText + '</div>' +
+              eventDateLabel +
               '<div class="kp-summary-wrap collapsed" id="kpSummaryWrap">' +
                 '<div class="kp-summary">' + renderedSummary + '</div>' +
                 '<button class="kp-toggle" type="button" id="kpToggle" ' +
