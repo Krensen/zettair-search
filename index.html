@@ -377,6 +377,66 @@
     .kp-summary li { margin: 0.15rem 0; }
     .kp-summary strong { color: #202124; font-weight: 600; }
 
+    /* Collapsed summary: clip to ~3 lines and add a soft fade so users
+       see there's more. The .kp-summary itself is positioned so its
+       ::after gradient sits at the bottom of the clipped content. */
+    .kp-summary-wrap { position: relative; }
+    .kp-summary { position: relative; }
+    .kp-summary-wrap.collapsed .kp-summary {
+      max-height: 4.6em;          /* ~3 lines at 1.55 line-height */
+      overflow: hidden;
+    }
+    .kp-summary-wrap.collapsed .kp-summary::after {
+      content: "";
+      position: absolute;
+      left: 0; right: 0; bottom: 0;
+      height: 2.2em;
+      background: linear-gradient(to bottom, rgba(248,249,250,0), #f8f9fa 95%);
+      pointer-events: none;
+    }
+    /* Smooth expand: max-height transition. Expanded state uses a
+       generous ceiling so any length fits. */
+    .kp-summary {
+      transition: max-height 320ms cubic-bezier(0.2, 0.7, 0.2, 1);
+    }
+    .kp-summary-wrap:not(.collapsed) .kp-summary {
+      max-height: 200em;
+    }
+
+    /* "Show more" / "Show less" chevron pill. Sits below the summary,
+       full-width-ish so the affordance is clear without dominating. */
+    .kp-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 0.5rem;
+      padding: 4px 12px 4px 14px;
+      background: transparent;
+      border: 1px solid #dadce0;
+      border-radius: 999px;
+      color: #1a73e8;
+      font: inherit;
+      font-size: 0.78rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 160ms ease, border-color 160ms ease;
+    }
+    .kp-toggle:hover {
+      background: #f1f3f4;
+      border-color: #c0c4c9;
+    }
+    .kp-toggle:focus-visible {
+      outline: 2px solid #1a73e8;
+      outline-offset: 2px;
+    }
+    .kp-toggle svg {
+      width: 14px; height: 14px;
+      transition: transform 240ms cubic-bezier(0.2, 0.7, 0.2, 1);
+    }
+    .kp-summary-wrap:not(.collapsed) .kp-toggle svg {
+      transform: rotate(180deg);
+    }
+
     /* Skeleton placeholder shown while the summary loads in. Four
        fake lines that shimmer left-to-right and cascade in from the
        left so the loading state is visibly animated, not just flashing. */
@@ -780,9 +840,31 @@
             // bail if the user fired another search in the meantime
             if (resultsQuery.value !== queryAtRequestTime) return;
             if (!bodyEl || !bodyEl.isConnected) return;
+            // Summary renders collapsed by default; user expands via the
+            // chevron toggle. Chevron rotates 180° when expanded; the
+            // .collapsed class on the wrapper drives clip + fade.
+            const chevron = '<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">' +
+              '<path d="M5.5 7.5L10 12l4.5-4.5" stroke="currentColor" stroke-width="2" ' +
+              'stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>';
             bodyEl.innerHTML =
               '<div class="kp-summary-badge">Summary</div>' +
-              '<div class="kp-summary">' + renderedSummary + '</div>';
+              '<div class="kp-summary-wrap collapsed" id="kpSummaryWrap">' +
+                '<div class="kp-summary">' + renderedSummary + '</div>' +
+                '<button class="kp-toggle" type="button" id="kpToggle" ' +
+                  'aria-expanded="false" aria-controls="kpSummaryWrap">' +
+                  '<span class="kp-toggle-label">Show more</span>' + chevron +
+                '</button>' +
+              '</div>';
+            const wrap = document.getElementById('kpSummaryWrap');
+            const btn = document.getElementById('kpToggle');
+            if (wrap && btn) {
+              btn.addEventListener('click', () => {
+                const collapsed = wrap.classList.toggle('collapsed');
+                btn.setAttribute('aria-expanded', String(!collapsed));
+                const lbl = btn.querySelector('.kp-toggle-label');
+                if (lbl) lbl.textContent = collapsed ? 'Show more' : 'Show less';
+              });
+            }
           }, 900);
         }));
       }
