@@ -87,10 +87,11 @@ RAIL_MAX                = 50    # current.json caps at this many items
 # Shape filter — the previous sample must already be at least this
 # ratio above baseline. Real trending articles ramp over multiple
 # hours; bot pile-ons and community-of-the-hour effects show as a
-# single isolated spike. With samples at 3h intervals, requiring the
-# t-3h sample to be 1.3x baseline rejects "one hour and gone" bursts
-# while passing genuine multi-hour movement.
-SHAPE_PREV_MIN_RATIO    = 1.3
+# single isolated spike. 1.15 is looser than the initial 1.3 — still
+# rejects "one hour and gone" bursts (where prev is at baseline,
+# ratio ~1.0) but lets early-ramp stories through where the previous
+# sample is only modestly elevated.
+SHAPE_PREV_MIN_RATIO    = 1.15
 
 # Dump URL template. {Y}/{Y-M}/pageviews-{YMD}-{HH}0000.gz
 DUMP_URL_TEMPLATE = (
