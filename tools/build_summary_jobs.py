@@ -61,9 +61,17 @@ SNIPPETS_MAP = Path(os.environ.get(
 ))
 
 # Bulk mode params
-DEFAULT_TOP_N = 2000
+# Bumped from 2000 -> 10000 to widen the head pool; the nav filter and
+# already-covered checks are cheap, so we can afford to scan more.
+DEFAULT_TOP_N = 10000
 DEFAULT_TOP_M = 5
-DEFAULT_RATIO_THRESHOLD = 2.0
+# Bumped from 2.0 -> 5.0 after observing that "looks nav but the summary
+# is a good experience" — even queries with a very dominant rank-1
+# result benefit from a knowledge-panel summary (Google does this for
+# clear nav queries too). The summary IS the answer for these. Higher
+# threshold lets more queries through. Anything still nav at 5x
+# domination is genuinely a single-page redirect and we skip it.
+DEFAULT_RATIO_THRESHOLD = 5.0
 DEFAULT_PER_DOC_CAP = 12000
 
 SCHEMA_VERSION = 1
