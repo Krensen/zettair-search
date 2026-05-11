@@ -242,8 +242,19 @@ log "Volume $VOLUME present."
 
 # Set volume ownership ONCE, before anything writes to it. Subsequent writes
 # are all done via `sudo -u zettair`, which creates files as zettair naturally.
-dry chown "$SERVICE_USER:$SERVICE_USER" "$VOLUME"
-dry chmod 750 "$VOLUME"
+# Volume is owned zettair:zettair mode 750 normally — but when the
+# summariser group exists (PRD-018, set up below in step 2a), we
+# regroup to summariser and add group-traverse so sparky can `cd` in
+# to reach summaries/. Without this the perfect-perms-on-summaries/
+# still wouldn't help because the parent directory blocks traversal.
+if getent group "$SUMMARISER_GROUP" &>/dev/null 2>&1 \
+   && id "$SPARKY_USER" &>/dev/null 2>&1; then
+    dry chown "$SERVICE_USER:$SUMMARISER_GROUP" "$VOLUME"
+    dry chmod 0750 "$VOLUME"
+else
+    dry chown "$SERVICE_USER:$SERVICE_USER" "$VOLUME"
+    dry chmod 0750 "$VOLUME"
+fi
 
 ### ── 4. Clone/update repos (deploy) ─────────────────────────────────────────
 
