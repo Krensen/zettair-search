@@ -335,6 +335,12 @@ The spike score is what stops perennials like Cleopatra and Hitler — they're a
 # Force a fetch outside the timer
 sudo -u zettair python3 /opt/zettair-search/tools/fetch_trending.py
 
+# Bootstrap 7 days of history in one shot (skips matched hours).
+# Use this on a fresh install to jump-start spike-mode scoring
+# instead of waiting a week for the live timer to accumulate samples.
+# ~56 dumps, ~2.8 GB downloaded, 5-10 min.
+sudo -u zettair python3 /opt/zettair-search/tools/fetch_trending.py --bootstrap 7
+
 # Trim history.jsonl to last 30 days
 sudo -u zettair python3 /opt/zettair-search/tools/fetch_trending.py --compact
 

@@ -466,13 +466,73 @@ def compact() -> None:
 
 # -- main -------------------------------------------------------------------
 
+def bootstrap(days: int, step_hours: int = 3) -> None:
+    """One-shot: walk backwards over `days` days at `step_hours`
+    intervals, downloading each pageview dump that's not already in
+    history.jsonl. Then run the usual scorer once at the end.
+
+    Skips hours we already have (via already_have), so this is
+    safely re-runnable — if it dies mid-way, just run it again and
+    it picks up where it left off.
+
+    Default step_hours=3 matches the live timer's cadence so that
+    bootstrapped samples and live samples sit on the same grid.
+    Pulling 7 days at 3h-step = 56 samples, ~2.8 GB of downloads,
+    typically 5-10 min on a decent connection.
+    """
+    start_hour = latest_complete_hour()
+    total_hours = days * 24
+    n_steps = total_hours // step_hours
+    log(f"bootstrap: pulling {n_steps} samples over the last {days} days "
+        f"({step_hours}h step) — newest first")
+
+    pulled = skipped = failed = 0
+    for i in range(n_steps):
+        hour = start_hour - dt.timedelta(hours=i * step_hours)
+        if already_have(hour):
+            skipped += 1
+            continue
+        try:
+            counts = fetch_dump(hour)
+        except urllib.error.HTTPError as e:
+            log(f"  HTTP error for {hour.isoformat()}: {e}")
+            failed += 1
+            continue
+        if not counts:
+            log(f"  no dump for {hour.isoformat()}")
+            failed += 1
+            continue
+        top_titles = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:1000]
+        append_history(hour, top_titles)
+        pulled += 1
+        log(f"  [{pulled}/{n_steps}] appended {hour.isoformat()} "
+            f"({len(top_titles)} titles)")
+
+    log(f"bootstrap done: pulled={pulled} skipped={skipped} failed={failed}")
+
+    if pulled:
+        history = read_history()
+        denyset = load_user_denylist()
+        payload = compute_current(history, denyset)
+        write_current(payload)
+        log(f"wrote current.json: mode={payload['mode']} items={len(payload['items'])}")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--compact", action="store_true", help="trim history > 30 days and exit")
+    p.add_argument("--bootstrap", type=int, metavar="DAYS",
+                   help="one-shot: pull DAYS days of history at 3h cadence (e.g. --bootstrap 7) and exit")
+    p.add_argument("--step-hours", type=int, default=3,
+                   help="bootstrap sampling step in hours (default 3, matches live timer)")
     args = p.parse_args()
 
     if args.compact:
         compact()
+        return
+
+    if args.bootstrap:
+        bootstrap(days=args.bootstrap, step_hours=args.step_hours)
         return
 
     result = fetch_latest_available()
