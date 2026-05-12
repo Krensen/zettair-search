@@ -609,28 +609,90 @@ def _read_trending() -> dict:
 # later tighten the producer back to 14d, tighten this too.
 STALE_NEWS_DAYS_SERVE = 30
 
+# Grace window after a query drops off the spike rail. News spikes are
+# bursty — articles dip below the spike threshold for a sample or two
+# (especially overnight UTC) and reappear. Without this window the
+# news panel would flicker. 24 hours = clearly "still recent news" to
+# a human; longer would risk serving stale news for a story that ended.
+SPIKE_GRACE_HOURS = 24
+
+TRENDING_RECENTLY_SEEN_PATH = os.environ.get(
+    "ZET_TRENDING_RECENTLY_SEEN",
+    "/mnt/wikipedia-source/trending/recently_seen.json",
+)
+
+# Mtime-cached reader for the recently-seen file. Same pattern as
+# _trending_cache; the file is rewritten every 3h by the trending
+# fetcher, so the cache stays fresh between fetches at zero cost.
+_recently_seen_cache: dict = {"mtime": 0.0, "data": {}}
+
+
+def _read_recently_seen() -> dict:
+    try:
+        st = os.stat(TRENDING_RECENTLY_SEEN_PATH)
+    except FileNotFoundError:
+        return {}
+    if st.st_mtime != _recently_seen_cache["mtime"]:
+        try:
+            with open(TRENDING_RECENTLY_SEEN_PATH, "rb") as f:
+                _recently_seen_cache["data"] = json.load(f)
+            _recently_seen_cache["mtime"] = st.st_mtime
+        except (json.JSONDecodeError, OSError):
+            return _recently_seen_cache["data"]
+    return _recently_seen_cache["data"]
+
+
+def _seen_within_grace(query_norm_str: str) -> bool:
+    """True if the query was on the spike rail within the last
+    SPIKE_GRACE_HOURS."""
+    seen = _read_recently_seen()
+    ts = seen.get(query_norm_str)
+    if not ts:
+        return False
+    try:
+        last = datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return False
+    age_hrs = (datetime.datetime.now(datetime.timezone.utc) - last).total_seconds() / 3600.0
+    return age_hrs <= SPIKE_GRACE_HOURS
+
 
 def _trending_spike_meta(query_norm_str: str) -> dict | None:
     """Return the trending item (with event_date / event_paragraph) if
-    the query is currently spiking AND the event is still fresh.
-    Otherwise None — caller falls through to biographical summary."""
+    the query is currently spiking OR was recently spiking within the
+    grace window, AND the event is still fresh. Otherwise None —
+    caller falls through to biographical summary.
+
+    The grace window prevents the news panel from flickering when a
+    query drops off the spike rail for a single sample (the rail
+    recomputes every 3h and traffic is bursty)."""
     payload = _read_trending()
-    if payload.get("mode") != "spike":
-        return None
     today = datetime.datetime.now(datetime.timezone.utc).date()
-    for it in payload.get("items", []):
-        if it.get("query", "").strip().lower() != query_norm_str:
-            continue
-        ed = it.get("event_date")
-        if not ed:
-            return it  # spike present but no event_date — serve as-is
-        try:
-            event_date = datetime.date.fromisoformat(ed)
-        except ValueError:
-            return None
-        if (today - event_date).days > STALE_NEWS_DAYS_SERVE:
-            return None  # event too old; fall through to biographical
-        return it
+    # Path 1: currently on the spike rail with full item metadata.
+    if payload.get("mode") == "spike":
+        for it in payload.get("items", []):
+            if it.get("query", "").strip().lower() != query_norm_str:
+                continue
+            ed = it.get("event_date")
+            if not ed:
+                return it
+            try:
+                event_date = datetime.date.fromisoformat(ed)
+            except ValueError:
+                return None
+            if (today - event_date).days > STALE_NEWS_DAYS_SERVE:
+                return None
+            return it
+    # Path 2: recently-on-the-rail grace window. We don't have the full
+    # item metadata so we return a shell dict with whatever we know.
+    # The caller checks for the :news summary's existence and serves it
+    # if so. event_date can't be enforced here because we don't store
+    # it in recently_seen.json — STALE_NEWS_DAYS_SERVE is enforced by
+    # the producer (it stops generating beyond EVENT_FRESHNESS_DAYS)
+    # and by the grace window naturally bounding "recently spiking".
+    if _seen_within_grace(query_norm_str):
+        return {"query": query_norm_str, "grace_window": True}
     return None
 
 

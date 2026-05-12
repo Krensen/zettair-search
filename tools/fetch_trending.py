@@ -479,6 +479,48 @@ def write_current(payload: dict) -> None:
     os.replace(tmp, CURRENT_PATH)
 
 
+RECENTLY_SEEN_PATH = TRENDING_DIR / "recently_seen.json"
+
+
+def update_recently_seen(payload: dict) -> None:
+    """Maintain a {query_norm: last_seen_at} record of every query that
+    has appeared on the spike rail. Older entries are pruned beyond
+    SERVE_GRACE_DAYS so the file doesn't grow forever.
+
+    Used by server.py to serve news summaries for a short grace
+    window after a query drops off the rail — news doesn't flicker
+    on every 3-hourly sample dip."""
+    if payload.get("mode") != "spike":
+        return
+    SERVE_GRACE_DAYS = 7   # generous; serve-time check is the real gate
+    seen: dict = {}
+    if RECENTLY_SEEN_PATH.exists():
+        try:
+            with open(RECENTLY_SEEN_PATH, encoding="utf-8") as f:
+                seen = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            seen = {}
+    now_iso = dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for it in payload.get("items", []):
+        q = (it.get("query") or "").strip().lower()
+        if q:
+            seen[q] = now_iso
+    # Prune entries older than SERVE_GRACE_DAYS
+    cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(days=SERVE_GRACE_DAYS)
+    pruned = {}
+    for q, ts in seen.items():
+        try:
+            t = dt.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.UTC)
+        except ValueError:
+            continue
+        if t >= cutoff:
+            pruned[q] = ts
+    tmp = RECENTLY_SEEN_PATH.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(pruned, f, separators=(",", ":"), sort_keys=True)
+    os.replace(tmp, RECENTLY_SEEN_PATH)
+
+
 # -- PRD-021: article-specificity gate --------------------------------------
 
 # Date-format regexes. Day-precision scores 4, month 2, bare year 1.
@@ -678,6 +720,7 @@ def recompute_and_write() -> None:
             f"dropped_fetch={stats['dropped_fetch']}")
         payload["items"] = kept
     write_current(payload)
+    update_recently_seen(payload)
     log(f"wrote current.json: mode={payload['mode']} items={len(payload['items'])}")
 
 
