@@ -603,10 +603,11 @@ def _read_trending() -> dict:
 
 
 # PRD-021: don't serve a news summary whose paragraph is older than
-# this. Independent of NEWS_REFRESH_HOURS (which is producer-side); the
-# server enforces "the news must still be recent" even if we couldn't
-# refresh in time.
-STALE_NEWS_DAYS_SERVE = 14
+# this. Must be >= the producer's EVENT_FRESHNESS_DAYS (currently 30,
+# tools/fetch_trending.py) — otherwise the producer generates summaries
+# the server immediately refuses to serve. 30 keeps us in sync; if we
+# later tighten the producer back to 14d, tighten this too.
+STALE_NEWS_DAYS_SERVE = 30
 
 
 def _trending_spike_meta(query_norm_str: str) -> dict | None:
