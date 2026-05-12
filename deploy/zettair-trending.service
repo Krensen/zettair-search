@@ -8,9 +8,17 @@ Type=oneshot
 User=zettair
 WorkingDirectory=/opt/zettair-search
 ExecStart=/usr/bin/python3 /opt/zettair-search/tools/fetch_trending.py
+ExecStartPost=/usr/bin/python3 /opt/zettair-search/tools/build_news_summary_jobs.py
 StandardOutput=journal
 StandardError=journal
 
 # A single fetch is small (~50 MB dump, ~5s of work). Cap memory so a
 # pathological day doesn't OOM the box.
 MemoryMax=512M
+
+# PRD-021: ExecStartPost chains the news-summary producer right after
+# the trending fetch writes current.json. Both run as zettair so no
+# privilege escalation needed. Avoids the up-to-3h gap where a newly-
+# spiking query would wait for the news producer's own timer. The
+# producer's standalone timer is kept as a boot-time / catch-up
+# backstop.
