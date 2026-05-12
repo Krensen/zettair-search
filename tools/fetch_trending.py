@@ -98,7 +98,11 @@ SHAPE_PREV_MIN_RATIO    = 1.15
 # Wikipedia article and finding the highest-scoring "recent dated event"
 # paragraph. Candidates without a qualifying paragraph fall off the rail.
 WIKI_API_URL            = "https://en.wikipedia.org/w/api.php"
-MAX_CANDIDATES_TO_GATE  = 50    # cap API fan-out per fetch
+# Bumped 50 -> 150 alongside TOP_SAMPLE_KEEP 3000 -> 10000. ~150
+# Wikipedia API calls per fetch = ~75s of work; well within the 3-hour
+# cycle. Without this bump the wider candidate pool would be wasted
+# because the gate only fans out to the top 50.
+MAX_CANDIDATES_TO_GATE  = 150
 MIN_PARA_LEN            = 120   # chars; below this is too short to be a real event para
 # Loosened after first prod run: with 56h of bootstrap history and a
 # narrow candidate pool, the strict gate (score>=4, fresh<=14d) found
@@ -108,7 +112,11 @@ MIN_PARA_LEN            = 120   # chars; below this is too short to be a real ev
 MIN_SPECIFICITY_SCORE   = 2     # was 4 — allows month-precision dates alone to qualify
 EVENT_FRESHNESS_DAYS    = 30    # was 14 — admits month-old events
 EVENT_PARA_MAX_CHARS    = 2000  # truncate event_paragraph stored in current.json
-TOP_SAMPLE_KEEP         = 3000  # widened from 1000 — gives specificity gate filter surface
+# Widened 1000 -> 3000 originally, then 3000 -> 10000 to give the
+# specificity gate more filter surface. News stories at rank 3000-10000
+# in the global hourly pageview list still pass the spike-shape filter
+# regularly; widening here catches them.
+TOP_SAMPLE_KEEP         = 10000
 
 # Dump URL template. {Y}/{Y-M}/pageviews-{YMD}-{HH}0000.gz
 DUMP_URL_TEMPLATE = (
