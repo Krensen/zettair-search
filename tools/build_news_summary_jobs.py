@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import sys
@@ -42,6 +43,40 @@ TRENDING_CURRENT = Path(os.environ.get(
     "/mnt/wikipedia-source/trending/current.json",
 ))
 NEWS_REFRESH_HOURS = int(os.environ.get("ZET_NEWS_REFRESH_HOURS", "48"))
+
+# Per-query record of "what event_paragraph hash did we last enqueue for
+# this query". Lets us detect when Wikipedia editors have updated the
+# article and trigger an immediate regeneration without waiting for the
+# 48h time-based refresh. Owned by this producer only — neither Mac
+# Mini nor server reads it.
+SOURCE_HASHES_PATH = Path(os.environ.get(
+    "ZET_NEWS_SOURCE_HASHES",
+    "/mnt/wikipedia-source/summaries/.news_source_hashes.json",
+))
+
+
+def hash_paragraph(text: str) -> str:
+    """Short stable hash of an event paragraph. 12 hex chars is plenty
+    for collision-resistance at our scale (thousands of summaries)."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def load_source_hashes() -> dict:
+    if not SOURCE_HASHES_PATH.exists():
+        return {}
+    try:
+        with open(SOURCE_HASHES_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_source_hashes(hashes: dict) -> None:
+    SOURCE_HASHES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SOURCE_HASHES_PATH.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(hashes, f, separators=(",", ":"), sort_keys=True)
+    os.replace(tmp, SOURCE_HASHES_PATH)
 
 
 def log(msg: str) -> None:
@@ -79,16 +114,29 @@ def already_pending(query_norm: str, suffix: str = ":news") -> bool:
     return False
 
 
-def needs_refresh(query_norm: str) -> tuple[bool, str]:
+def needs_refresh(query_norm: str, current_hash: str, source_hashes: dict) -> tuple[bool, str]:
     """Return (needs_refresh, reason).
 
-    True if the news summary is missing, or older than
-    NEWS_REFRESH_HOURS. Uses the installed .md mtime as the freshness
-    signal (it's set when the installer moves the file)."""
+    True if any of:
+      - The news summary is missing from the FlatStore map.
+      - The current event_paragraph hash differs from what we last
+        enqueued — Wikipedia editors have updated the article and the
+        summary is now content-stale.
+      - The installed .md is older than NEWS_REFRESH_HOURS — time-based
+        backstop in case the hash check missed something.
+
+    The hash check is the main driver; the time check is the safety
+    net. Together they refresh actively-edited articles within one
+    cycle of an edit AND keep idle articles refreshed at least every
+    48h."""
     composite_key = f"{query_norm}:news"
     smap = load_summaries_map()
     if composite_key not in smap:
         return True, "missing"
+    prev = source_hashes.get(query_norm) or {}
+    prev_hash = prev.get("source_hash")
+    if prev_hash != current_hash:
+        return True, f"source paragraph changed ({prev_hash} -> {current_hash})"
     md = installed_md_path(query_norm)
     if not md.exists():
         # Map has the offset but the .md was archived/deleted. The
@@ -98,7 +146,7 @@ def needs_refresh(query_norm: str) -> tuple[bool, str]:
     age_hrs = (dt.datetime.now().timestamp() - md.stat().st_mtime) / 3600.0
     if age_hrs > NEWS_REFRESH_HOURS:
         return True, f"stale ({age_hrs:.1f}h old)"
-    return False, f"fresh ({age_hrs:.1f}h old)"
+    return False, f"fresh ({age_hrs:.1f}h old, hash matches)"
 
 
 def write_job(item: dict) -> Path:
@@ -149,9 +197,12 @@ def main() -> None:
     items = payload.get("items", [])
     log(f"loaded {len(items)} trending items from {args.current}")
 
+    source_hashes = load_source_hashes()
     n_enqueued = n_skipped_no_para = n_skipped_existing = n_skipped_pending = 0
+    n_refreshed_by_hash = 0
     for it in items:
-        if not it.get("event_paragraph"):
+        para = it.get("event_paragraph")
+        if not para:
             n_skipped_no_para += 1
             continue
         query = it.get("query", "")
@@ -161,20 +212,37 @@ def main() -> None:
         if already_pending(query_norm):
             n_skipped_pending += 1
             continue
-        needs, reason = needs_refresh(query_norm)
+        current_hash = hash_paragraph(para)
+        needs, reason = needs_refresh(query_norm, current_hash, source_hashes)
+        if reason.startswith("source paragraph changed"):
+            n_refreshed_by_hash += 1
         if not needs:
             n_skipped_existing += 1
             continue
         log(f"  enqueue {query_norm}:news ({reason})")
         if not args.dry_run:
             write_job(it)
+            # Record the hash we just enqueued so the next cycle can
+            # detect further edits. We do this even if the Mac Mini
+            # later fails — failed regenerations will be retried by
+            # the time-based check when the .md ages past the
+            # NEWS_REFRESH_HOURS backstop.
+            source_hashes[query_norm] = {
+                "source_hash": current_hash,
+                "enqueued_at": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "event_date": it.get("event_date"),
+            }
         n_enqueued += 1
+
+    if n_enqueued and not args.dry_run:
+        save_source_hashes(source_hashes)
 
     log(
         f"done: enqueued={n_enqueued} "
         f"skipped_no_para={n_skipped_no_para} "
         f"skipped_existing_fresh={n_skipped_existing} "
-        f"skipped_already_pending={n_skipped_pending}"
+        f"skipped_already_pending={n_skipped_pending} "
+        f"refreshed_by_hash_change={n_refreshed_by_hash}"
     )
 
 
