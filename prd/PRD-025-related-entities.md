@@ -440,9 +440,11 @@ Could be very compelling visually. Future PRD.
   Maybe. Default in v1: no class biasing. Tune in M5 if results look
   weird.
 
-- **Symmetric vs asymmetric relatedness.** Random walks naturally
-  produce asymmetric scores (A→B ≠ B→A). Some related-pairs feel
-  more natural symmetric ("Liverpool ↔ Everton"). Combine forward
-  + reverse walks? Probably yes; cheap extra pass.
+- **Symmetric vs asymmetric relatedness.** Resolved: directional.
+  The original Bing version was directional and the asymmetric
+  shape is the right signal — A→B captures "from A, you reach B"
+  which is the natural query intent (clicking from a specific
+  entity toward broader/related ones differs from the reverse).
+  Forward walks only; no symmetric merge.
 
 - **Number of items in the rail.** 6, 8, 10? Default 8. M5 tune.
