@@ -716,43 +716,52 @@
     }
 
     /* ── PRD-024: CITE THIS ── */
+    /* The trigger lives in a flex .title-row alongside the result
+       title (or kp-title), anchored to the title's right edge so its
+       position doesn't shift when a thumbnail is present. Variant H
+       styling: tinted pill, blue text on light-blue background. */
+    .title-row {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      flex-wrap: wrap;
+    }
+    .title-row .result-title,
+    .title-row .kp-title {
+      margin: 0;            /* the row itself owns the spacing */
+    }
     .cite-trigger {
       display: inline-flex;
       align-items: center;
-      gap: 4px;
-      margin-left: 0.65rem;
-      padding: 2px 8px;
-      background: transparent;
+      gap: 5px;
+      height: 22px;
+      padding: 0 10px 0 8px;
+      background: #e8f0fe;
       border: 1px solid transparent;
-      border-radius: 12px;
-      color: #5f6368;
+      border-radius: 11px;
+      color: #1a73e8;
       font: inherit;
-      font-size: 0.75rem;
+      font-size: 0.72rem;
+      font-weight: 500;
       cursor: pointer;
-      transition: color 140ms ease, background 140ms ease, border-color 140ms ease;
-      vertical-align: middle;
+      flex-shrink: 0;
+      transition: background 140ms ease, border-color 140ms ease;
     }
     .cite-trigger:hover {
-      color: #1a73e8;
-      background: #f1f3f4;
-      border-color: #dadce0;
+      background: #d2e3fc;
     }
     .cite-trigger:focus-visible {
       outline: 2px solid #1a73e8;
       outline-offset: 2px;
     }
     .cite-trigger svg {
-      width: 12px;
-      height: 12px;
+      width: 11px;
+      height: 11px;
       stroke: currentColor;
       stroke-width: 2;
       fill: none;
       stroke-linecap: round;
       stroke-linejoin: round;
-    }
-    /* Panel-variant: same affordance under the knowledge-panel source line. */
-    .kp-source .cite-trigger {
-      margin-left: 0.5rem;
     }
 
     .cite-popover {
@@ -1130,15 +1139,17 @@
         <div class="knowledge-panel${hasSummary ? ' has-summary' : ''}">
           ${imgHtml}
           <div class="knowledge-panel-text">
-            <a class="kp-title" href="${esc(wikiUrl)}" target="_blank" rel="noopener noreferrer"
-               onclick="logClick(${JSON.stringify(q)}, ${JSON.stringify(top.docno)}, 1, ${top.score})"
-            >${esc(title)}</a>
-            <div class="kp-source">
-              <img src="https://www.google.com/s2/favicons?domain=en.wikipedia.org&sz=32" alt="">
-              <span>Wikipedia · en.wikipedia.org</span>
+            <div class="title-row">
+              <a class="kp-title" href="${esc(wikiUrl)}" target="_blank" rel="noopener noreferrer"
+                 onclick="logClick(${JSON.stringify(q)}, ${JSON.stringify(top.docno)}, 1, ${top.score})"
+              >${esc(title)}</a>
               <button class="cite-trigger" type="button"
                  data-title="${esc(title)}" data-url="${esc(wikiUrl)}" data-docno="${esc(top.docno)}"
                  aria-label="Cite this article">${CITE_ICON_SVG}<span>Cite</span></button>
+            </div>
+            <div class="kp-source">
+              <img src="https://www.google.com/s2/favicons?domain=en.wikipedia.org&sz=32" alt="">
+              <span>Wikipedia · en.wikipedia.org</span>
             </div>
             <div id="kpBody">${initialBody}</div>
           </div>
@@ -1212,13 +1223,15 @@
                   <span class="result-site-name">Wikipedia</span>
                   <span class="result-breadcrumb">${esc(crumb)}</span>
                 </div>
+              </div>
+              <div class="title-row">
+                <a class="result-title" href="${esc(url)}" target="_blank" rel="noopener noreferrer"
+                   onclick="logClick(${JSON.stringify(q)}, ${JSON.stringify(r.docno)}, ${r.rank}, ${r.score})"
+                >${esc(title)}</a>
                 <button class="cite-trigger" type="button"
                   data-title="${esc(title)}" data-url="${esc(url)}" data-docno="${esc(r.docno)}"
                   aria-label="Cite this result">${CITE_ICON_SVG}<span>Cite</span></button>
               </div>
-              <a class="result-title" href="${esc(url)}" target="_blank" rel="noopener noreferrer"
-                 onclick="logClick(${JSON.stringify(q)}, ${JSON.stringify(r.docno)}, ${r.rank}, ${r.score})"
-              >${esc(title)}</a>
               <div class="result-snippet">${highlightQuery(r.snippet || '', q)}</div>
             </div>
             ${thumb}
