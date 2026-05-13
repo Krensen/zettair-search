@@ -682,6 +682,37 @@
     .result-title:hover { text-decoration: underline; }
     .result-title:visited { color: #609; }
 
+    /* Title row: holds the title link AND the right-aligned Cite link.
+       The title link grows to fill space; the trigger stays on the
+       same baseline at the right edge. */
+    .result-title-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+    .result-title-row .result-title {
+      flex: 1;
+      min-width: 0;
+    }
+    .result-title-row .cite-trigger,
+    .kp-title-row .cite-trigger {
+      flex-shrink: 0;
+      align-self: center;
+      margin-left: 0;
+    }
+    /* Knowledge-panel title also gets a row layout so Cite right-aligns. */
+    .kp-title-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+    .kp-title-row .kp-title {
+      flex: 1;
+      min-width: 0;
+    }
+
     .result-snippet {
       font-size: 0.9rem;
       color: #4d5156;
@@ -1121,11 +1152,14 @@
         <div class="knowledge-panel${hasSummary ? ' has-summary' : ''}">
           ${imgHtml}
           <div class="knowledge-panel-text">
-            <a class="kp-title" href="${esc(wikiUrl)}" target="_blank" rel="noopener noreferrer"
-               onclick="logClick(${JSON.stringify(q)}, ${JSON.stringify(top.docno)}, 1, ${top.score})"
-            >${esc(title)}</a><button class="cite-trigger" type="button"
-               data-title="${esc(title)}" data-url="${esc(wikiUrl)}" data-docno="${esc(top.docno)}"
-               aria-label="Cite this article">${CITE_ICON_SVG}<span>Cite</span></button>
+            <div class="kp-title-row">
+              <a class="kp-title" href="${esc(wikiUrl)}" target="_blank" rel="noopener noreferrer"
+                 onclick="logClick(${JSON.stringify(q)}, ${JSON.stringify(top.docno)}, 1, ${top.score})"
+              >${esc(title)}</a>
+              <button class="cite-trigger" type="button"
+                 data-title="${esc(title)}" data-url="${esc(wikiUrl)}" data-docno="${esc(top.docno)}"
+                 aria-label="Cite this article">${CITE_ICON_SVG}<span>Cite</span></button>
+            </div>
             <div class="kp-source">
               <img src="https://www.google.com/s2/favicons?domain=en.wikipedia.org&sz=32" alt="">
               <span>Wikipedia · en.wikipedia.org</span>
@@ -1203,11 +1237,14 @@
                   <span class="result-breadcrumb">${esc(crumb)}</span>
                 </div>
               </div>
-              <a class="result-title" href="${esc(url)}" target="_blank" rel="noopener noreferrer"
-                 onclick="logClick(${JSON.stringify(q)}, ${JSON.stringify(r.docno)}, ${r.rank}, ${r.score})"
-              >${esc(title)}</a><button class="cite-trigger" type="button"
-                 data-title="${esc(title)}" data-url="${esc(url)}" data-docno="${esc(r.docno)}"
-                 aria-label="Cite this result">${CITE_ICON_SVG}<span>Cite</span></button>
+              <div class="result-title-row">
+                <a class="result-title" href="${esc(url)}" target="_blank" rel="noopener noreferrer"
+                   onclick="logClick(${JSON.stringify(q)}, ${JSON.stringify(r.docno)}, ${r.rank}, ${r.score})"
+                >${esc(title)}</a>
+                <button class="cite-trigger" type="button"
+                   data-title="${esc(title)}" data-url="${esc(url)}" data-docno="${esc(r.docno)}"
+                   aria-label="Cite this result">${CITE_ICON_SVG}<span>Cite</span></button>
+              </div>
               <div class="result-snippet">${highlightQuery(r.snippet || '', q)}</div>
             </div>
             ${thumb}
