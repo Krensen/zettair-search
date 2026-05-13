@@ -452,16 +452,27 @@ else
     log "TREC file already exists — skipping wiki2trec.py."
 fi
 
-### ── 10. Delete bz2 if disk is tight (zettair) ─────────────────────────────
+### ── 10. Keep / delete bz2 (zettair) ───────────────────────────────────────
+#
+# We KEEP the bz2 by default. Earlier behaviour was to auto-delete when
+# free space dropped below BZ2_DELETE_THRESHOLD_GB (default 30 GB). That
+# burned us repeatedly: PRD-025 (related-entities graph) and PRD-026
+# (news-rail) both need to re-process the bz2, and a routine setup.sh
+# run that deleted it forced a ~30 GB re-download to rebuild.
+#
+# To opt back IN to auto-delete (e.g. on a small VPS where you only ever
+# rebuild via cron), set BZ2_AUTO_DELETE=1 in the environment. CI never
+# sets this so deploys never delete.
 
 if [ -f "$BZ2_FILE" ]; then
     FREE_GB=$(df -BG "$VOLUME" 2>/dev/null | awk 'NR==2 {gsub("G",""); print $4}' || echo 999)
-    if [ "${FREE_GB:-999}" -lt "$BZ2_DELETE_THRESHOLD_GB" ] 2>/dev/null; then
-        log "Free space is ${FREE_GB}GB < ${BZ2_DELETE_THRESHOLD_GB}GB — deleting bz2..."
+    if [ "${BZ2_AUTO_DELETE:-0}" = "1" ] \
+       && [ "${FREE_GB:-999}" -lt "$BZ2_DELETE_THRESHOLD_GB" ] 2>/dev/null; then
+        log "BZ2_AUTO_DELETE=1 and free space ${FREE_GB}GB < ${BZ2_DELETE_THRESHOLD_GB}GB — deleting bz2..."
         as_zettair rm -f "$BZ2_FILE"
         log "bz2 deleted."
     else
-        log "Free space is ${FREE_GB}GB — keeping bz2."
+        log "Keeping bz2 (free=${FREE_GB}GB; set BZ2_AUTO_DELETE=1 to enable auto-delete)"
     fi
 fi
 
