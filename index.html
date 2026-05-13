@@ -706,6 +706,171 @@
       font-size: 0.95rem;
     }
 
+    /* ── PRD-024: CITE THIS ── */
+    .cite-trigger {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      margin-left: 0.65rem;
+      padding: 2px 8px;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      color: #5f6368;
+      font: inherit;
+      font-size: 0.75rem;
+      cursor: pointer;
+      transition: color 140ms ease, background 140ms ease, border-color 140ms ease;
+      vertical-align: middle;
+    }
+    .cite-trigger:hover {
+      color: #1a73e8;
+      background: #f1f3f4;
+      border-color: #dadce0;
+    }
+    .cite-trigger:focus-visible {
+      outline: 2px solid #1a73e8;
+      outline-offset: 2px;
+    }
+    .cite-trigger svg {
+      width: 12px;
+      height: 12px;
+      stroke: currentColor;
+      stroke-width: 2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    /* Panel-variant: same affordance under the knowledge-panel source line. */
+    .kp-source .cite-trigger {
+      margin-left: 0.5rem;
+    }
+
+    .cite-popover {
+      position: absolute;
+      z-index: 1000;
+      width: 480px;
+      max-width: calc(100vw - 2rem);
+      max-height: 70vh;
+      overflow-y: auto;
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      box-shadow: 0 8px 24px rgba(60,64,67,0.15);
+      padding: 0;
+      opacity: 0;
+      transform: translateY(-4px);
+      animation: cite-pop-in 180ms cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+    }
+    @keyframes cite-pop-in {
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .cite-popover-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.7rem 0.85rem 0.65rem;
+      border-bottom: 1px solid #ebebeb;
+    }
+    .cite-popover-header strong {
+      font-weight: 600;
+      font-size: 0.85rem;
+      color: #202124;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 380px;
+    }
+    .cite-popover-close {
+      background: transparent;
+      border: none;
+      color: #5f6368;
+      cursor: pointer;
+      font-size: 1.2rem;
+      line-height: 1;
+      padding: 2px 6px;
+      border-radius: 50%;
+    }
+    .cite-popover-close:hover { background: #f1f3f4; color: #202124; }
+    .cite-row {
+      padding: 0.55rem 0.85rem;
+      border-bottom: 1px solid #f5f5f5;
+    }
+    .cite-row:last-child { border-bottom: none; }
+    .cite-row-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.3rem;
+    }
+    .cite-style-name {
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #1a73e8;
+    }
+    .cite-copy {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 10px;
+      background: transparent;
+      border: 1px solid #dadce0;
+      border-radius: 999px;
+      color: #1a73e8;
+      font: inherit;
+      font-size: 0.72rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+    }
+    .cite-copy:hover {
+      background: #f1f3f4;
+      border-color: #c0c4c9;
+    }
+    .cite-copy.copied {
+      background: #e6f4ea;
+      color: #137333;
+      border-color: #a6d4ad;
+    }
+    .cite-text {
+      font-size: 0.78rem;
+      color: #3c4043;
+      line-height: 1.5;
+      word-wrap: break-word;
+      user-select: text;
+      font-family: inherit;
+    }
+    .cite-text.bibtex {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 0.72rem;
+      white-space: pre-wrap;
+      background: #fafbfc;
+      padding: 0.55rem 0.65rem;
+      border-radius: 6px;
+      border: 1px solid #ebebeb;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .cite-popover { animation: none; opacity: 1; transform: none; }
+    }
+    /* Mobile: bottom-sheet variant. */
+    @media (max-width: 640px) {
+      .cite-popover {
+        position: fixed;
+        bottom: 0; left: 0; right: 0; top: auto;
+        width: 100%;
+        max-width: 100%;
+        max-height: 80vh;
+        border-radius: 16px 16px 0 0;
+        animation: cite-sheet-in 220ms cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+        transform: translateY(100%);
+      }
+      @keyframes cite-sheet-in {
+        to { transform: translateY(0); opacity: 1; }
+      }
+    }
+
     @media (max-width: 640px) {
       .results-body { margin-left: 1rem; padding-right: 1rem; }
       .knowledge-panel { flex-direction: column; }
@@ -958,7 +1123,9 @@
           <div class="knowledge-panel-text">
             <a class="kp-title" href="${esc(wikiUrl)}" target="_blank" rel="noopener noreferrer"
                onclick="logClick(${JSON.stringify(q)}, ${JSON.stringify(top.docno)}, 1, ${top.score})"
-            >${esc(title)}</a>
+            >${esc(title)}</a><button class="cite-trigger" type="button"
+               data-title="${esc(title)}" data-url="${esc(wikiUrl)}" data-docno="${esc(top.docno)}"
+               aria-label="Cite this article">${CITE_ICON_SVG}<span>Cite</span></button>
             <div class="kp-source">
               <img src="https://www.google.com/s2/favicons?domain=en.wikipedia.org&sz=32" alt="">
               <span>Wikipedia · en.wikipedia.org</span>
@@ -1038,7 +1205,9 @@
               </div>
               <a class="result-title" href="${esc(url)}" target="_blank" rel="noopener noreferrer"
                  onclick="logClick(${JSON.stringify(q)}, ${JSON.stringify(r.docno)}, ${r.rank}, ${r.score})"
-              >${esc(title)}</a>
+              >${esc(title)}</a><button class="cite-trigger" type="button"
+                 data-title="${esc(title)}" data-url="${esc(url)}" data-docno="${esc(r.docno)}"
+                 aria-label="Cite this result">${CITE_ICON_SVG}<span>Cite</span></button>
               <div class="result-snippet">${highlightQuery(r.snippet || '', q)}</div>
             </div>
             ${thumb}
@@ -1253,6 +1422,250 @@
       keepalive: true,   // survives page navigation
     }).catch(() => {});
   }
+
+  // ── PRD-024: Cite this ────────────────────────────────────────────────
+  //
+  // Pure client-side citation generator + popover. Builds APA, MLA,
+  // Chicago, Harvard, BibTeX strings from the result's title + URL +
+  // today's date. Each row has a Copy button. Closes on Escape /
+  // click-outside / explicit ×. Only one popover open at a time.
+
+  const CITE_ICON_SVG = '<svg viewBox="0 0 20 20" aria-hidden="true">' +
+    '<path d="M5 4h7l3 3v9H5z"/>' +
+    '<path d="M12 4v3h3"/>' +
+    '<line x1="7.5" y1="11" x2="12.5" y2="11"/>' +
+    '<line x1="7.5" y1="13.5" x2="12.5" y2="13.5"/>' +
+    '</svg>';
+
+  const MONTH_LONG = ['January','February','March','April','May','June',
+                      'July','August','September','October','November','December'];
+  const MONTH_BIB  = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  function citeFormatDate(d, style) {
+    const y = d.getFullYear(), m = d.getMonth(), day = d.getDate();
+    if (style === 'apa')     return `${MONTH_LONG[m]} ${day}, ${y}`;
+    if (style === 'mla')     return `${day} ${MONTH_LONG[m]} ${y}`;
+    if (style === 'chicago') return `${MONTH_LONG[m]} ${day}, ${y}`;
+    if (style === 'harvard') return `${day} ${MONTH_LONG[m]} ${y}`;
+    if (style === 'bibtex')  return `${day}-${MONTH_BIB[m]}-${y}`;
+    return d.toISOString().slice(0, 10);
+  }
+
+  // Generates the 5 standard citation strings. Matches Wikipedia's own
+  // cite-tool conventions: author = "Wikipedia contributors", year =
+  // current year, retrieved = today.
+  function buildCitations({ title, url }) {
+    const now = new Date();
+    const year = now.getFullYear();
+    const dateApa     = citeFormatDate(now, 'apa');
+    const dateMla     = citeFormatDate(now, 'mla');
+    const dateChicago = citeFormatDate(now, 'chicago');
+    const dateHarvard = citeFormatDate(now, 'harvard');
+    const dateBib     = citeFormatDate(now, 'bibtex');
+    const bibKey = 'wiki:' + (url.split('/').pop() || title.replace(/\s+/g, ''));
+    return [
+      {
+        // APA 7 cites the publication date as just year+month+day with no
+        // extra year prefix — and "Retrieved <date>" already carries the
+        // year too. Use APA's standard "(YYYY, Month DD)" form by
+        // splitting dateApa back into its components.
+        style: 'APA',
+        text: `Wikipedia contributors. (${year}, ${MONTH_LONG[now.getMonth()]} ${now.getDate()}). ${title}. In Wikipedia, The Free Encyclopedia. Retrieved ${dateApa}, from ${url}`,
+      },
+      {
+        style: 'MLA',
+        text: `"${title}." Wikipedia, The Free Encyclopedia. Wikimedia Foundation, ${dateMla}. Web. ${dateMla}.`,
+      },
+      {
+        style: 'Chicago',
+        text: `Wikipedia contributors. "${title}." Wikipedia, The Free Encyclopedia. Last modified ${dateChicago}. ${url}.`,
+      },
+      {
+        style: 'Harvard',
+        text: `Wikipedia contributors (${year}) ${title}. Available at: ${url} (Accessed: ${dateHarvard}).`,
+      },
+      {
+        style: 'BibTeX',
+        text: `@misc{${bibKey},\n  author       = "Wikipedia contributors",\n  title        = "${title} --- {Wikipedia}{,} The Free Encyclopedia",\n  year         = "${year}",\n  url          = "${url}",\n  note         = "[Online; accessed ${dateBib}]"\n}`,
+        monospace: true,
+      },
+    ];
+  }
+
+  // Tracks the currently-open popover so a second open closes the first.
+  let _openCitePopover = null;
+
+  function closeCitePopover(opts) {
+    if (!_openCitePopover) return;
+    const { popover, trigger, listeners } = _openCitePopover;
+    popover.remove();
+    document.removeEventListener('keydown', listeners.key);
+    document.removeEventListener('click', listeners.outside, true);
+    // Only return focus to the trigger when the user dismissed
+    // explicitly (Escape, ×, click outside). If we're closing because
+    // they clicked a different trigger, leave focus alone — the new
+    // popover will focus its own first Copy button.
+    if (!(opts && opts.skipFocusRestore) && trigger && trigger.focus) {
+      trigger.focus();
+    }
+    _openCitePopover = null;
+  }
+
+  function openCitePopover(triggerEl, { title, url, docno }) {
+    closeCitePopover({ skipFocusRestore: true });
+    const cites = buildCitations({ title, url });
+    const pop = document.createElement('div');
+    pop.className = 'cite-popover';
+    pop.setAttribute('role', 'dialog');
+    pop.setAttribute('aria-label', 'Cite ' + title);
+    pop.innerHTML =
+      '<div class="cite-popover-header">' +
+        '<strong></strong>' +
+        '<button class="cite-popover-close" type="button" aria-label="Close">×</button>' +
+      '</div>' +
+      cites.map((c, i) =>
+        '<div class="cite-row">' +
+          '<div class="cite-row-head">' +
+            '<span class="cite-style-name">' + c.style + '</span>' +
+            '<button class="cite-copy" type="button" data-i="' + i + '" ' +
+              'aria-label="Copy ' + c.style + ' citation">Copy</button>' +
+          '</div>' +
+          '<div class="cite-text' + (c.monospace ? ' bibtex' : '') + '"></div>' +
+        '</div>'
+      ).join('');
+    // Set text content via DOM (not innerHTML) so unescaped chars in
+    // the citation strings can't break out.
+    pop.querySelector('.cite-popover-header strong').textContent = 'Cite "' + title + '"';
+    pop.querySelectorAll('.cite-text').forEach((el, i) => {
+      el.textContent = cites[i].text;
+    });
+
+    // Position the popover. Default: below trigger, right-aligned to it
+    // so it doesn't spill off screen. Flips above if no room. On
+    // mobile (≤640) the CSS makes it a bottom-sheet so positioning
+    // is moot.
+    document.body.appendChild(pop);
+    const isMobile = window.matchMedia('(max-width: 640px)').matches;
+    if (!isMobile) {
+      const r = triggerEl.getBoundingClientRect();
+      const popH = pop.offsetHeight;
+      const popW = pop.offsetWidth;
+      const spaceBelow = window.innerHeight - r.bottom;
+      const top = (spaceBelow >= popH + 16 || r.top < popH + 16)
+        ? window.scrollY + r.bottom + 8
+        : window.scrollY + r.top - popH - 8;
+      let left = window.scrollX + r.right - popW;
+      if (left < 8) left = 8;
+      pop.style.top  = top + 'px';
+      pop.style.left = left + 'px';
+    }
+
+    // Wire close handlers
+    const closeBtn = pop.querySelector('.cite-popover-close');
+    closeBtn.addEventListener('click', closeCitePopover);
+
+    // Wire copy buttons
+    pop.querySelectorAll('.cite-copy').forEach(btn => {
+      btn.addEventListener('click', e => {
+        const i = parseInt(btn.dataset.i, 10);
+        const text = cites[i].text;
+        copyToClipboard(text).then(ok => {
+          if (!ok) return;
+          const original = btn.textContent;
+          btn.textContent = 'Copied!';
+          btn.classList.add('copied');
+          setTimeout(() => {
+            btn.textContent = original;
+            btn.classList.remove('copied');
+          }, 1500);
+          // Telemetry: log via the existing /click endpoint with a
+          // sentinel rank/score so it's distinguishable from real
+          // clicks in the log analyser.
+          fetch('/click', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              q: 'cite:' + cites[i].style.toLowerCase(),
+              docno: docno || '',
+              rank: -1,
+              score: -1,
+            }),
+            keepalive: true,
+          }).catch(() => {});
+        });
+      });
+    });
+
+    // Esc / click-outside
+    const onKey = e => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        closeCitePopover();
+      }
+    };
+    const onOutside = e => {
+      if (pop.contains(e.target) || triggerEl.contains(e.target)) return;
+      closeCitePopover();
+    };
+    document.addEventListener('keydown', onKey);
+    // capture-phase click so we close before any child handlers fire
+    document.addEventListener('click', onOutside, true);
+
+    _openCitePopover = {
+      popover: pop,
+      trigger: triggerEl,
+      listeners: { key: onKey, outside: onOutside },
+    };
+
+    // Focus the first Copy button for keyboard users
+    const firstCopy = pop.querySelector('.cite-copy');
+    if (firstCopy) firstCopy.focus();
+  }
+
+  // Clipboard helper with a textarea fallback for older browsers.
+  function copyToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(() => true).catch(() => false);
+    }
+    return new Promise(resolve => {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.top = '-1000px';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); resolve(true); }
+      catch { resolve(false); }
+      finally { ta.remove(); }
+    });
+  }
+
+  // Builds the markup for a Cite trigger that can be embedded in a
+  // result card or knowledge panel. Returns an HTML string.
+  function citeTriggerHtml() {
+    return '<button class="cite-trigger" type="button" aria-label="Cite this result">'
+      + CITE_ICON_SVG + '<span>Cite</span></button>';
+  }
+
+  // Event delegation: a single document-level click handler opens the
+  // right popover when any cite-trigger is clicked. Avoids per-result
+  // event registration as the list re-renders.
+  document.addEventListener('click', e => {
+    const trigger = e.target.closest('.cite-trigger');
+    if (!trigger) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // If clicking the same trigger again, close.
+    if (_openCitePopover && _openCitePopover.trigger === trigger) {
+      closeCitePopover();
+      return;
+    }
+    const title = trigger.dataset.title || '';
+    const url   = trigger.dataset.url   || '';
+    const docno = trigger.dataset.docno || '';
+    if (!title || !url) return;
+    openCitePopover(trigger, { title, url, docno });
+  });
 
   // PRD-018: tiny markdown renderer for knowledge-panel summaries.
   // Supports paragraphs, **bold**, and `-`/`*` bullet lists. Anything
