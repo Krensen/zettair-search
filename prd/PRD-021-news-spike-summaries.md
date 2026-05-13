@@ -476,15 +476,23 @@ we see the single-paragraph approach's quality bar.
 
 ## Known behaviours (not bugs)
 
-- **Ambiguous titles drop off the rail.** Wikimedia attributes
-  pageviews to whatever article the user actually lands on. If
-  "Euphoria" spikes because of the HBO show but readers initially
-  land on `Euphoria` (the article about the emotion), our pipeline
-  tracks the emotion article. That article has no recent dated event
-  paragraph → gate rejects it → chip falls off. This is correct
-  behaviour: the spike isn't a clean signal that the show is making
-  news (it's a signal that the *term* is being searched, which is
-  weaker). The chip would correctly appear if `Euphoria_(American_TV_series)`
-  itself were spiking. Considered "follow disambig pages" as a
-  mitigation; decided to accept the current behaviour rather than
-  add complexity for a noisy signal.
+- **Articles without dated event paragraphs still stay on the rail.**
+  The specificity gate was originally a drop-filter: only articles
+  with a recent dated event paragraph passed. Observed in practice
+  that many genuinely-trending articles (celebrities being talked
+  about, places in the news without a "On X date" event line)
+  failed the drop-filter and disappeared from the rail entirely.
+  The signal "pageview traffic is spiking" is itself sufficient to
+  call something newsworthy. Now the gate just *enriches* — items
+  with a dated paragraph get event_paragraph/event_date fields (and
+  later a news-style knowledge panel from the Mac Mini), items
+  without those fields stay on the rail as plain search chips.
+  Only network-fetch failures drop an item, since we can't render
+  a chip whose docno we couldn't verify.
+
+- **Ambiguous titles still get plain chips.** "Euphoria" the article
+  is about the emotion, not the HBO show. Pageviews accumulate on
+  whichever article readers land on. Used to drop because no event
+  paragraph; now stays as a plain trending chip. Click runs a
+  regular search, which surfaces the show further down the
+  results. Imperfect but better than hiding.

@@ -676,40 +676,51 @@ def find_event_paragraph(wikitext: str, today: dt.date) -> dict | None:
 
 
 def apply_specificity_gate(items: list[dict]) -> list[dict]:
-    """For each item, fetch its Wikipedia article and look for a recent
-    dated event paragraph. Drop items that fail. Items that pass gain
-    event_paragraph / event_date / event_specificity fields.
+    """For each item, fetch its Wikipedia article and try to find a
+    recent dated event paragraph. Items that have one gain
+    event_paragraph / event_date / event_specificity fields (and
+    will get a "news" knowledge panel served).
 
-    Operates in input order (already sorted by spike score). Caps at
-    MAX_CANDIDATES_TO_GATE so API fan-out stays bounded."""
+    Items that pass the pageview-shape filter but DON'T have an event
+    paragraph are STILL kept on the rail — they're newsworthy by
+    traffic signal alone, even if Wikipedia editors haven't documented
+    a dated event yet. They just run a regular search when clicked.
+
+    Only network failures (couldn't fetch wikitext at all) drop the
+    item — we don't want to show a chip whose docno we can't verify.
+
+    Caps the total kept at RAIL_MAX so we don't render hundreds."""
     today = dt.datetime.now(dt.UTC).date()
     kept = []
     n_checked = 0
-    n_dropped_no_para = 0
+    n_with_para = 0
+    n_without_para = 0
     n_dropped_fetch = 0
     for it in items[:MAX_CANDIDATES_TO_GATE]:
         n_checked += 1
         docno = it.get("docno") or it.get("title", "").replace(" ", "_")
         if not docno:
-            n_dropped_no_para += 1
+            n_dropped_fetch += 1
             continue
         wt = fetch_article_wikitext(docno)
         if wt is None:
             n_dropped_fetch += 1
             continue
         ev = find_event_paragraph(wt, today)
-        if ev is None:
-            n_dropped_no_para += 1
-            continue
-        it["event_paragraph"]   = ev["paragraph"]
-        it["event_date"]        = ev["event_date"]
-        it["event_specificity"] = ev["specificity"]
+        if ev is not None:
+            it["event_paragraph"]   = ev["paragraph"]
+            it["event_date"]        = ev["event_date"]
+            it["event_specificity"] = ev["specificity"]
+            n_with_para += 1
+        else:
+            n_without_para += 1
         kept.append(it)
         if len(kept) >= RAIL_MAX:
             break
     return kept, {
         "checked": n_checked,
-        "dropped_no_para": n_dropped_no_para,
+        "with_para": n_with_para,
+        "without_para": n_without_para,
         "dropped_fetch": n_dropped_fetch,
         "kept": len(kept),
     }
@@ -723,8 +734,8 @@ def recompute_and_write() -> None:
     log(f"pre-gate: mode={payload['mode']} items={len(payload['items'])}")
     if payload["mode"] == "spike" and payload["items"]:
         kept, stats = apply_specificity_gate(payload["items"])
-        log(f"specificity gate: checked={stats['checked']} "
-            f"kept={stats['kept']} dropped_no_para={stats['dropped_no_para']} "
+        log(f"specificity gate: checked={stats['checked']} kept={stats['kept']} "
+            f"with_para={stats['with_para']} without_para={stats['without_para']} "
             f"dropped_fetch={stats['dropped_fetch']}")
         payload["items"] = kept
     write_current(payload)
