@@ -212,10 +212,15 @@ fi
 # These packages were added to the project after the original
 # /etc/zettair-setup-done marker was placed on prod, so the §1 block
 # wouldn't pick them up on re-run. Idempotent: pip exits 0 when
-# already satisfied.
+# already satisfied. Non-fatal if install fails — the PRD-025 build
+# stage will skip when numpy is missing (and the feature degrades to
+# "no right-rail panel"), so we don't want one apt mirror hiccup to
+# tank an otherwise-fine deploy.
 if ! python3 -c "import numpy" >/dev/null 2>&1; then
     decided numpy "PRD-025 build_related.py needs numpy"
-    dry pip3 install --quiet --break-system-packages numpy
+    if ! dry pip3 install --quiet --break-system-packages numpy; then
+        log "  WARN: numpy install failed; PRD-025 build stages will skip"
+    fi
 else
     skipped numpy "already installed"
 fi
@@ -580,48 +585,68 @@ fi
 # its inputs. The whole chain runs cheaply on the second invocation
 # (everything skipped) when inputs haven't changed. Full first-time
 # build is multi-hour; subsequent rebuilds at corpus refresh time only.
+#
+# CRITICAL: the first two stages need the enwiki bz2 dump. §10 deletes
+# the bz2 to save disk after TREC is built, so on steady-state prod
+# the bz2 is GONE. Gate the whole §14b on BZ2_FILE existing — and if
+# it doesn't, log a one-line note and skip. The server side handles
+# missing related.store/related.map gracefully (no rail).
 
 RELATED_DIR="$VOLUME/related"
 ENTITY_CLASSES="$VOLUME/entity_classes.json"
 RELATED_STORE="$VOLUME/related.store"
 RELATED_MAP="$VOLUME/related.map"
 
-if [ ! -f "$ENTITY_CLASSES" ] || [ "$BZ2_FILE" -nt "$ENTITY_CLASSES" ]; then
-    decided entity-classes "missing or stale wrt enwiki dump"
-    log "Running build_entity_set.py (1-2 hours)..."
-    as_zettair python3 "$WIKI_DIR/build_entity_set.py" \
-        --enwiki-dump "$BZ2_FILE" \
-        --titles      "$TITLES_FILE" \
-        --out         "$ENTITY_CLASSES"
-    log "entity_classes.json written to $ENTITY_CLASSES"
+if [ ! -f "$BZ2_FILE" ] && [ ! -f "$ENTITY_CLASSES" ]; then
+    # No bz2 and no prior entity_classes.json — nothing we can do.
+    # Server will hide the rail; deploy continues normally.
+    skipped prd-025-pipeline "enwiki bz2 absent (deleted in §10); cannot bootstrap PRD-025. Re-download manually or trigger a corpus refresh, then re-run setup.sh"
 else
-    skipped entity-classes "present and newer than enwiki dump"
-fi
+    if [ ! -f "$ENTITY_CLASSES" ] || { [ -f "$BZ2_FILE" ] && [ "$BZ2_FILE" -nt "$ENTITY_CLASSES" ]; }; then
+        if [ ! -f "$BZ2_FILE" ]; then
+            skipped entity-classes "bz2 missing; keeping existing entity_classes.json"
+        else
+            decided entity-classes "missing or stale wrt enwiki dump"
+            log "Running build_entity_set.py (1-2 hours)..."
+            as_zettair python3 "$WIKI_DIR/build_entity_set.py" \
+                --enwiki-dump "$BZ2_FILE" \
+                --titles      "$TITLES_FILE" \
+                --out         "$ENTITY_CLASSES"
+            log "entity_classes.json written to $ENTITY_CLASSES"
+        fi
+    else
+        skipped entity-classes "present and newer than enwiki dump"
+    fi
 
-GRAPH_OFFSETS="$RELATED_DIR/graph.offsets.bin"
-if [ ! -f "$GRAPH_OFFSETS" ] || [ "$ENTITY_CLASSES" -nt "$GRAPH_OFFSETS" ]; then
-    decided link-graph "missing or stale wrt entity_classes.json"
-    as_zettair mkdir -p "$RELATED_DIR"
-    log "Running build_link_graph.py (1-2 hours)..."
-    as_zettair python3 "$WIKI_DIR/build_link_graph.py" \
-        --enwiki-dump     "$BZ2_FILE" \
-        --entity-classes  "$ENTITY_CLASSES" \
-        --out-dir         "$RELATED_DIR"
-    log "link graph written to $RELATED_DIR"
-else
-    skipped link-graph "present and newer than entity_classes.json"
-fi
+    GRAPH_OFFSETS="$RELATED_DIR/graph.offsets.bin"
+    if [ -f "$ENTITY_CLASSES" ] && { [ ! -f "$GRAPH_OFFSETS" ] || [ "$ENTITY_CLASSES" -nt "$GRAPH_OFFSETS" ]; }; then
+        if [ ! -f "$BZ2_FILE" ]; then
+            skipped link-graph "bz2 missing; keeping existing graph"
+        else
+            decided link-graph "missing or stale wrt entity_classes.json"
+            as_zettair mkdir -p "$RELATED_DIR"
+            log "Running build_link_graph.py (1-2 hours)..."
+            as_zettair python3 "$WIKI_DIR/build_link_graph.py" \
+                --enwiki-dump     "$BZ2_FILE" \
+                --entity-classes  "$ENTITY_CLASSES" \
+                --out-dir         "$RELATED_DIR"
+            log "link graph written to $RELATED_DIR"
+        fi
+    else
+        skipped link-graph "present and newer than entity_classes.json (or no classes file yet)"
+    fi
 
-if [ ! -f "$RELATED_STORE" ] || [ "$GRAPH_OFFSETS" -nt "$RELATED_STORE" ]; then
-    decided related-store "missing or stale wrt graph"
-    log "Running build_related.py (~1-2 hours)..."
-    as_zettair python3 "$WIKI_DIR/build_related.py" \
-        --graph-dir "$RELATED_DIR" \
-        --out-store "$RELATED_STORE" \
-        --out-map   "$RELATED_MAP"
-    log "related.store + related.map written"
-else
-    skipped related-store "present and newer than graph"
+    if [ -f "$GRAPH_OFFSETS" ] && { [ ! -f "$RELATED_STORE" ] || [ "$GRAPH_OFFSETS" -nt "$RELATED_STORE" ]; }; then
+        decided related-store "missing or stale wrt graph"
+        log "Running build_related.py (~1-2 hours)..."
+        as_zettair python3 "$WIKI_DIR/build_related.py" \
+            --graph-dir "$RELATED_DIR" \
+            --out-store "$RELATED_STORE" \
+            --out-map   "$RELATED_MAP"
+        log "related.store + related.map written"
+    else
+        skipped related-store "present and newer than graph (or no graph yet)"
+    fi
 fi
 
 ### ── 15. Build URLs store if missing (zettair, to volume) ──────────────────
