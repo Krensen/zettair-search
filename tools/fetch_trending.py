@@ -118,6 +118,26 @@ EVENT_PARA_MAX_CHARS    = 2000  # truncate event_paragraph stored in current.jso
 # regularly; widening here catches them.
 TOP_SAMPLE_KEEP         = 10000
 
+# -- PRD-022: news-headline fallback ---------------------------------------
+# When the Wikipedia paragraph gate misses, fetch Google News RSS for the
+# query and synthesise an event_paragraph from the top headlines. Same
+# downstream pipeline as Wikipedia-sourced events.
+NEWS_RSS_URL_TEMPLATE   = (
+    "https://news.google.com/rss/search?"
+    "q={q}&hl=en-US&gl=US&ceid=US:en"
+)
+NEWS_FETCH_TIMEOUT_S    = 8
+NEWS_CACHE_HOURS        = int(os.environ.get("ZET_NEWS_CACHE_HOURS", "6"))
+NEWS_FRESHNESS_DAYS     = 14
+NEWS_MAX_HEADLINES      = 5
+NEWS_MIN_HEADLINES      = 2     # below this we don't fall back at all
+NEWS_CACHE_DIR          = TRENDING_DIR / "news_cache"
+# Query qualifier — empirically "+ wikipedia" over-filtered (returned 0
+# headlines for queries with strong news, including Andy Burnham and
+# Taylor Swift). Disabled by default; can be re-enabled if we see
+# wrong-entity drift in practice.
+NEWS_QUERY_QUALIFIER    = ""
+
 # Dump URL template. {Y}/{Y-M}/pageviews-{YMD}-{HH}0000.gz
 DUMP_URL_TEMPLATE = (
     "https://dumps.wikimedia.org/other/pageviews/"
@@ -675,6 +695,181 @@ def find_event_paragraph(wikitext: str, today: dt.date) -> dict | None:
     }
 
 
+# -- PRD-022: Google News RSS fallback --------------------------------------
+
+# RSS pubDate format: "Mon, 12 May 2026 14:30:00 GMT"
+_RSS_DATE_RE = re.compile(
+    r"^[A-Z][a-z]{2},\s+"           # "Mon, "
+    r"(\d{1,2})\s+"                  # day
+    r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+"
+    r"(\d{4})\s+"                    # year
+    r"(\d{2}):(\d{2}):(\d{2})\s+"   # HH:MM:SS
+    r"(GMT|UTC|[\+\-]\d{4})$"
+)
+_RSS_MONTH = {m: i for i, m in enumerate(
+    ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"], 1)}
+# Google News title format is usually "Headline - Source" — extract both.
+_GN_TITLE_RE = re.compile(r"^(.*?)\s+-\s+([^-]+)$")
+
+
+def _parse_rss_pubdate(s: str) -> dt.datetime | None:
+    if not s:
+        return None
+    m = _RSS_DATE_RE.match(s.strip())
+    if not m:
+        return None
+    day, mon, year, hh, mm, ss, _tz = m.groups()
+    try:
+        return dt.datetime(int(year), _RSS_MONTH[mon], int(day),
+                           int(hh), int(mm), int(ss), tzinfo=dt.UTC)
+    except (ValueError, KeyError):
+        return None
+
+
+def _parse_news_rss(xml_bytes: bytes, today: dt.date) -> list[dict]:
+    """Parse a Google News RSS response into a list of headline dicts.
+    Filters out items older than NEWS_FRESHNESS_DAYS and in the future.
+    Returns at most NEWS_MAX_HEADLINES, newest first."""
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError:
+        return []
+    cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(days=NEWS_FRESHNESS_DAYS)
+    items = []
+    for item in root.iter("item"):
+        title_raw = (item.findtext("title") or "").strip()
+        pub_raw   = (item.findtext("pubDate") or "").strip()
+        link      = (item.findtext("link") or "").strip()
+        # Source comes from the <source> element when present. Google
+        # News also appends " - Source" to the title; strip that to
+        # keep the synthesised paragraph clean, regardless of whether
+        # <source> was set.
+        source = ""
+        src_el = item.find("source")
+        if src_el is not None and src_el.text:
+            source = src_el.text.strip()
+        title = title_raw
+        m = _GN_TITLE_RE.match(title_raw)
+        if m:
+            title = m.group(1).strip()
+            if not source:
+                source = m.group(2).strip()
+        pub = _parse_rss_pubdate(pub_raw)
+        if pub is None:
+            continue
+        if pub < cutoff or pub.date() > today + dt.timedelta(days=1):
+            continue
+        items.append({
+            "title": title,
+            "source": source,
+            "link": link,
+            "pub_date": pub.isoformat(),
+        })
+    items.sort(key=lambda h: h["pub_date"], reverse=True)
+    return items[:NEWS_MAX_HEADLINES]
+
+
+def fetch_news_headlines(query: str, today: dt.date | None = None) -> list[dict]:
+    """Hit Google News RSS for `query` and return the top recent
+    headlines (newest first). Returns [] on any failure — caller
+    treats missing/empty identically."""
+    if today is None:
+        today = dt.datetime.now(dt.UTC).date()
+    qstr = query + NEWS_QUERY_QUALIFIER
+    url = NEWS_RSS_URL_TEMPLATE.format(q=urllib.parse.quote(qstr))
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=NEWS_FETCH_TIMEOUT_S) as r:
+            data = r.read()
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return []
+    return _parse_news_rss(data, today)
+
+
+def fetch_news_headlines_cached(query: str, today: dt.date | None = None) -> list[dict]:
+    """Disk-cached variant. Cache file lives in NEWS_CACHE_DIR keyed by
+    a safe-form of the query. TTL = NEWS_CACHE_HOURS. We cache both
+    successful hits and empty results — the rate of revisit per query
+    matters more than perfect freshness on a transient miss."""
+    if today is None:
+        today = dt.datetime.now(dt.UTC).date()
+    NEWS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    # Make the query path-safe. query_norm is already lowercased with
+    # collapsed whitespace; just replace anything filesystem-hostile.
+    safe = re.sub(r"[^a-z0-9_-]+", "_", query.strip().lower())[:120] or "_empty_"
+    cache_file = NEWS_CACHE_DIR / f"{safe}.json"
+    now = dt.datetime.now(dt.UTC)
+    if cache_file.exists():
+        try:
+            payload = json.loads(cache_file.read_text(encoding="utf-8"))
+            fetched_at = dt.datetime.strptime(
+                payload["fetched_at"], "%Y-%m-%dT%H:%M:%SZ"
+            ).replace(tzinfo=dt.UTC)
+            age_hrs = (now - fetched_at).total_seconds() / 3600.0
+            if age_hrs <= NEWS_CACHE_HOURS:
+                return payload.get("headlines", [])
+        except (OSError, KeyError, ValueError, json.JSONDecodeError):
+            pass   # fall through to refetch
+    headlines = fetch_news_headlines(query, today=today)
+    try:
+        tmp = cache_file.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({
+                "fetched_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "headlines": headlines,
+            }, f, separators=(",", ":"))
+        os.replace(tmp, cache_file)
+    except OSError:
+        pass   # cache write failure isn't fatal
+    return headlines
+
+
+def _prune_news_cache(max_age_days: int = 7) -> int:
+    """Delete cache files older than max_age_days. Returns count
+    deleted. Called once per fetch_trending run; cheap (directory
+    listing + mtime check)."""
+    if not NEWS_CACHE_DIR.exists():
+        return 0
+    cutoff = dt.datetime.now(dt.UTC).timestamp() - max_age_days * 86400
+    n = 0
+    for f in NEWS_CACHE_DIR.glob("*.json"):
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+                n += 1
+        except OSError:
+            continue
+    return n
+
+
+def synthesise_news_paragraph(display_title: str, headlines: list[dict]) -> str | None:
+    """Build an event_paragraph-equivalent from a list of Google News
+    headlines. Returned string is shaped like a Wikipedia paragraph
+    enough that the existing news-prompt path on the Mac Mini handles
+    it correctly. Returns None if the headlines are too thin to be
+    useful — caller treats as no event."""
+    if len(headlines) < NEWS_MIN_HEADLINES:
+        return None
+    lines = [f"Recent news about {display_title}:"]
+    for h in headlines:
+        title = h.get("title", "").strip()
+        source = h.get("source", "").strip()
+        try:
+            d = dt.datetime.fromisoformat(h["pub_date"]).strftime("%d %B %Y")
+        except (KeyError, ValueError):
+            d = ""
+        if title and source and d:
+            lines.append(f"- \"{title}\" ({source}, {d})")
+        elif title and source:
+            lines.append(f"- \"{title}\" ({source})")
+        elif title:
+            lines.append(f"- \"{title}\"")
+    if len(lines) <= 1:
+        return None
+    return "\n".join(lines)
+
+
 def apply_specificity_gate(items: list[dict]) -> list[dict]:
     """For each item, fetch its Wikipedia article and try to find a
     recent dated event paragraph. Items that have one gain
@@ -693,7 +888,8 @@ def apply_specificity_gate(items: list[dict]) -> list[dict]:
     today = dt.datetime.now(dt.UTC).date()
     kept = []
     n_checked = 0
-    n_with_para = 0
+    n_with_para_wiki = 0
+    n_with_para_rss = 0
     n_without_para = 0
     n_dropped_fetch = 0
     for it in items[:MAX_CANDIDATES_TO_GATE]:
@@ -708,18 +904,38 @@ def apply_specificity_gate(items: list[dict]) -> list[dict]:
             continue
         ev = find_event_paragraph(wt, today)
         if ev is not None:
+            # Path 1: Wikipedia has a recent dated event paragraph.
             it["event_paragraph"]   = ev["paragraph"]
             it["event_date"]        = ev["event_date"]
             it["event_specificity"] = ev["specificity"]
-            n_with_para += 1
+            it["event_source"]      = "wikipedia"
+            n_with_para_wiki += 1
         else:
-            n_without_para += 1
+            # Path 2 (PRD-022): try Google News RSS as a fallback.
+            query = it.get("query") or it.get("title", "").lower()
+            display_title = it.get("title") or query.title()
+            headlines = fetch_news_headlines_cached(query, today=today)
+            para = synthesise_news_paragraph(display_title, headlines)
+            if para is not None:
+                # Use the latest headline as event_date.
+                try:
+                    latest = max(dt.datetime.fromisoformat(h["pub_date"])
+                                 for h in headlines).date().isoformat()
+                except (KeyError, ValueError):
+                    latest = today.isoformat()
+                it["event_paragraph"] = para
+                it["event_date"]      = latest
+                it["event_source"]    = "news_rss"
+                n_with_para_rss += 1
+            else:
+                n_without_para += 1
         kept.append(it)
         if len(kept) >= RAIL_MAX:
             break
     return kept, {
         "checked": n_checked,
-        "with_para": n_with_para,
+        "with_para_wiki": n_with_para_wiki,
+        "with_para_rss": n_with_para_rss,
         "without_para": n_without_para,
         "dropped_fetch": n_dropped_fetch,
         "kept": len(kept),
@@ -733,9 +949,12 @@ def recompute_and_write() -> None:
     payload = compute_current(history, denyset)
     log(f"pre-gate: mode={payload['mode']} items={len(payload['items'])}")
     if payload["mode"] == "spike" and payload["items"]:
+        _prune_news_cache()   # cheap; runs once per cycle
         kept, stats = apply_specificity_gate(payload["items"])
         log(f"specificity gate: checked={stats['checked']} kept={stats['kept']} "
-            f"with_para={stats['with_para']} without_para={stats['without_para']} "
+            f"with_para_wiki={stats['with_para_wiki']} "
+            f"with_para_rss={stats['with_para_rss']} "
+            f"without_para={stats['without_para']} "
             f"dropped_fetch={stats['dropped_fetch']}")
         payload["items"] = kept
     write_current(payload)

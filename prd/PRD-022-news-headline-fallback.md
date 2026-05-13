@@ -1,6 +1,6 @@
 # PRD-022: News-Headline Fallback for Spiking Articles Without Wikipedia Events
 
-**Status:** Draft
+**Status:** M1+M2 implemented; ready for prod observation (M3)
 **Author:** metabot
 **Date:** 2026-05-13
 
@@ -125,9 +125,11 @@ URL form:
 https://news.google.com/rss/search?q={urlencode(query)}+wikipedia&hl=en-US&gl=US
 ```
 
-The `+wikipedia` qualifier biases results toward news about the
-Wikipedia subject rather than generic search noise. Empirically
-works well for celebrities and politicians; less critical for events.
+**Empirical finding (build time):** the `+wikipedia` qualifier was
+*too* aggressive — returned 0 headlines for Andy Burnham, Taylor
+Swift, and most other test queries. Disabled by default. Risk of
+wrong-entity drift for ambiguous names exists but is unverified;
+we'll see in practice and tighten if needed.
 
 Parsing: standard `xml.etree.ElementTree` on the RSS response. Each
 `<item>` has `<title>`, `<link>`, `<pubDate>`, `<source>`. We keep up
