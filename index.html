@@ -1185,13 +1185,19 @@
     if (!rail) return;
     // Inline SVGs — kept here rather than in the HTML so the rail can
     // stay an empty container until data lands.
-    // Trending-up arrow for the label and chips.
+    // Trending-up arrow for the label and for in-index chips.
     const TREND_ICON = '<svg viewBox="0 0 20 20" aria-hidden="true">' +
       '<polyline points="3,14 8,9 11,12 17,5"/>' +
       '<polyline points="12,5 17,5 17,10"/></svg>';
     // Spark/star for the "Popular" (raw-mode) label.
     const SPARK_ICON = '<svg viewBox="0 0 20 20" aria-hidden="true">' +
       '<path d="M10 3 L11.5 8 L17 9 L13 12.5 L14 18 L10 15 L6 18 L7 12.5 L3 9 L8.5 8 Z"/></svg>';
+    // External-link arrow for chips whose article isn't in our index —
+    // these go to en.wikipedia.org so the user still finds the page.
+    const EXTERNAL_ICON = '<svg viewBox="0 0 20 20" aria-hidden="true">' +
+      '<polyline points="11,4 16,4 16,9"/>' +
+      '<line x1="16" y1="4" x2="9" y2="11"/>' +
+      '<path d="M14 12 L14 15 Q14 16 13 16 L5 16 Q4 16 4 15 L4 7 Q4 6 5 6 L8 6"/></svg>';
     const start = () => {
       fetch('/api/trending?n=8')
         .then(r => r.ok ? r.json() : null)
@@ -1206,23 +1212,23 @@
           lbl.className = 'trending-rail-label';
           lbl.innerHTML = labelIcon + '<span>' + labelText + '</span>';
           inner.appendChild(lbl);
-          // Every chip runs a search — even if the exact docno isn't
-          // in our index, the search itself usually finds good results
-          // (e.g. disambig title misses but the underlying article
-          // matches the query well). Keeping users inside our app is
-          // worth the occasional empty results page; the in_index
-          // distinction we used to make caused more confusion than
-          // it helped.
           data.items.forEach(it => {
             const a = document.createElement('a');
-            a.className = 'trending-chip';
-            a.innerHTML = TREND_ICON + '<span></span>';
+            const inIndex = it.in_index !== false;   // default true if older payload
+            a.className = 'trending-chip' + (inIndex ? '' : ' external');
+            a.innerHTML = (inIndex ? TREND_ICON : EXTERNAL_ICON) + '<span></span>';
             a.querySelector('span').textContent = it.title;
-            a.href = '/?q=' + encodeURIComponent(it.query);
-            a.addEventListener('click', e => {
-              e.preventDefault();
-              doSearch(it.query);
-            });
+            if (inIndex) {
+              a.href = '/?q=' + encodeURIComponent(it.query);
+              a.addEventListener('click', e => {
+                e.preventDefault();
+                doSearch(it.query);
+              });
+            } else {
+              a.href = it.wiki_url || ('https://en.wikipedia.org/wiki/' + encodeURIComponent(it.title.replace(/ /g, '_')));
+              a.target = '_blank';
+              a.rel = 'noopener noreferrer';
+            }
             inner.appendChild(a);
           });
           rail.innerHTML = '';
