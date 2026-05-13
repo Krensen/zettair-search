@@ -48,9 +48,47 @@ When evaluating these ideas, remember what we already have on prod:
 
 ---
 
+## The infrastructure constraint (read this before evaluating any idea)
+
+We have **one Mac Mini doing batch LLM work** via a queue-based
+pipeline. Each generation takes 30s-4min. Sustained throughput is
+maybe 50-200 generations per day. That divides every idea below
+cleanly into two buckets:
+
+**Batch-friendly (✓ works as-is):** anything precomputable per-article
+or per-fixed-set, that can be ground through over hours or days.
+Frontend-only features are also in this bucket (no LLM needed).
+
+**Live-inference-required (✗ doesn't fit):** anything where the user's
+input is unique each time and we can't precompute the response.
+Live LLM calls would mean either: (a) building a synchronous endpoint
+the Mac Mini can't sustain at any meaningful load, or (b) paying for
+hosted inference (Groq/Together/etc) which adds cost + a third-party
+dependency.
+
+The categorisation isn't a veto on live-inference ideas — but it tells
+us which ideas need a different infrastructure conversation before we
+can build them. A "cache the head, fall through the tail" hybrid is
+sometimes the answer; sometimes it's "wait until we have a budget for
+hosted inference".
+
+Per-idea feasibility flags appear below as **Infra: ✓ / ✗ / hybrid**.
+
+---
+
 ## Ideas
 
 ### 1. AI-powered "ask my question" search
+
+**Infra: hybrid (head cache) / ✗ for long tail without hosted inference.**
+The most differentiated idea here is also the one our infrastructure
+struggles most with. Every question is unique, so a Mac Mini batch
+pipeline can't sustain live answering. Two paths: (a) pre-generate
+answers for the top N likely questions in batch and serve them from
+a FlatStore, falling back to plain search for the long tail; (b)
+add a hosted-inference provider (Groq, Together, OpenAI) for the
+live path, paying per-query. Worth doing as a separate PRD that
+picks a path explicitly.
 
 A second search mode (or a tab next to the regular results) where the
 user types a natural-language question and gets a 2-3 paragraph
@@ -81,6 +119,15 @@ source. Latency: needs caching for popular questions.
 
 ### 2. Compare view — side-by-side article comparison
 
+**Infra: hybrid.** The two side-by-side panels are pure retrieval +
+existing summaries — no new LLM work. The "key differences" panel
+needs an LLM call per pair, which doesn't scale to arbitrary query
+pairs at live latency. Realistic path: precompute the differences
+panel for the top ~1000 popular query pairs in batch (one Mac Mini
+run gets that done overnight) and serve from cache; for un-cached
+pairs, show the two panels without the third panel (or show "compare
+notes loading…" and generate offline for next time).
+
 Query like `python vs ruby` or `bordeaux vs burgundy` renders two
 panels side by side: lead paragraphs, infobox-extracted facts, common
 categories. Third panel synthesised by the Mac Mini: "Key
@@ -108,6 +155,11 @@ check before committing to the comparison layout.
 
 ### 3. Timeline view for events / people
 
+**Infra: ✓ batch.** Per-article precomputation; the Mac Mini grinds
+through them once. Updates only when an article changes
+significantly. Output stored in a FlatStore alongside the existing
+summary stores.
+
 For event or biography queries, extract dated content from the
 article body and render as a vertical timeline (date + one-sentence
 event description). Wikipedia articles bury dates in walls of prose;
@@ -134,6 +186,10 @@ some intersperse dates with year-only references (bad).
 
 ### 4. Reading time + difficulty signal
 
+**Infra: ✓ batch (no LLM).** Pure computation — word count and a
+readability metric. One-time pass at index build, stored in a
+sidecar.
+
 Each result shows "5 min read · accessible" or "23 min read ·
 technical". Computed offline.
 
@@ -157,6 +213,9 @@ articles; not user-breaking.
 
 ### 5. "Cite this" button on every result
 
+**Infra: ✓ frontend-only.** No backend, no LLM. Pure client-side
+formatting of fields the result already carries.
+
 Hover a result → "Cite" → instant APA / MLA / Chicago / BibTeX
 formatted citation copied to clipboard. Or click → modal with a
 copy button per format.
@@ -178,6 +237,10 @@ without per-article tuning.
 ---
 
 ### 6. Saved searches / reading lists
+
+**Infra: ✓ frontend-only initially.** localStorage for v1; if we
+later add accounts for sync that's a tiny user-data endpoint, no
+LLM.
 
 Anonymous reading lists stored in localStorage initially. Click a
 "Save" affordance on any result → it joins your sidebar list.
@@ -203,6 +266,10 @@ considerations if we later add accounts.
 
 ### 7. "Related but different" suggestions
 
+**Infra: ✓ batch (no LLM).** Pure offline aggregation over
+clicks.jsonl, recomputed nightly. Result is a JSON map served from
+disk.
+
 Below results: "Readers also searched for…" derived from our click
 logs. Different from Wikipedia's "See also" (editor-curated):
 ours is real reader behaviour.
@@ -227,6 +294,9 @@ worth designing in.
 
 ### 8. Article quality heuristic
 
+**Infra: ✓ batch (no LLM).** Extracted from the Wikipedia API at
+index time, stored in the docmap or a sidecar.
+
 Each result tagged with a small badge: "Featured", "Good article",
 "Stub", "Contested" (NPOV disputes, neutrality tags), based on
 Wikipedia's quality flags.
@@ -249,6 +319,10 @@ applied if we can extract it.
 ---
 
 ### 9. Daily / weekly digest email
+
+**Infra: ✓ batch (no NEW LLM).** Reuses the news summaries we
+already generate for the homepage. The daily cron just renders +
+sends. Cost is the email service (Mailgun/Postmark/SES), not LLM.
 
 User enters email → daily email with the day's trending articles +
 their news panels. No accounts needed initially; just email +
@@ -273,6 +347,9 @@ count.
 
 ### 10. Image-rich result mode
 
+**Infra: ✓ frontend-only.** The image store is already on disk;
+we just render differently.
+
 Toggle: "Show results as image grid" — Pinterest-style layout,
 each tile is the article's lead image + title. For
 exploration queries (`art nouveau`, `medieval castles`, `octopus
@@ -296,6 +373,11 @@ existing onerror = hide pattern.
 ---
 
 ### 11. Time-machine / "as of date" search
+
+**Infra: ✓ batch (no LLM).** This is a storage and indexing
+problem, not a generation problem. Mac Mini batch fits fine —
+snapshots are pulled on a schedule, the build is offline. The
+cost is disk, not compute.
 
 Query box has a date picker. Search "donald trump" as of
 `2019-06-01` and you get the article *as it was* on that date,
@@ -322,6 +404,14 @@ with a small window (last 12 months) and expand.
 
 ### 12. Voice / audio mode
 
+**Infra: ✓ if browser TTS / ✗ if hosted TTS.** Web Speech API is
+free and runs in the user's browser — zero server load. Quality
+is "fine, not great" and varies by platform. If we want
+higher-quality voices (ElevenLabs / OpenAI TTS) we'd pre-render
+audio for popular articles in batch on the Mac Mini and store .mp3
+in a FlatStore; long tail falls back to Web Speech. Same
+hybrid pattern as the AI ask-a-question idea.
+
 Click a "Listen" button on a result → article read aloud via TTS,
 starting with the lead paragraph and continuing on demand.
 
@@ -341,21 +431,45 @@ platforms. Quality is "fine" not "great".
 
 ---
 
-## My read on prioritisation
+## My read on prioritisation (with infra reality folded in)
 
-If we picked three to build next, in this order:
+The original "ship the AI ask-a-question feature next" hits the
+Mac-Mini-only-and-batch wall hard — that one needs a hosted-inference
+budget OR a head-query cache PRD before it's buildable.
 
-1. **#5 Cite this** — half a day, captures student market, no risk.
-2. **#10 Image grid mode** — 2 days, instantly distinctive in demos,
-   uses existing infrastructure.
-3. **#1 AI-powered ask my question** — the big WOW feature, 1-2
-   weeks, addresses the search intent Wikipedia can't.
+Revised top 3, all of which fit the current infra:
 
-That sequence gives a quick win, a demo-able win, and then the
-headline differentiator. Each builds confidence in the next.
+1. **#5 Cite this** — half a day, frontend-only, captures student
+   market, no infra impact.
+2. **#10 Image grid mode** — 2 days, frontend-only, uses the image
+   store we already have, demos beautifully.
+3. **#4 Reading time + difficulty** — 1-2 days, batch precompute
+   (no LLM), quietly useful on every result.
 
-But the ranking is a starting point, not a decision. The user
-should pick what excites them.
+These three all ship within a week and all use what we have.
+
+After those, the highest-impact batch-friendly features are:
+
+- **#7 Related but different** — uses our click data, distinctive
+  signal Wikipedia doesn't surface.
+- **#11 Time-machine search** — heavy storage but pure batch
+  pipeline.
+- **#3 Timeline view** — per-article precompute, reuses the
+  date-extraction infrastructure from PRD-021.
+
+The "headline differentiators" that need an infra conversation:
+
+- **#1 AI ask-a-question** — needs either a hosted-inference budget
+  or a head-query batch cache. Write a separate PRD that picks
+  a path before building.
+- **#12 Voice/audio (hosted TTS variant)** — same pattern; the
+  Web Speech browser variant is fine on current infra.
+- **#2 Compare view (key-differences panel)** — the precomputed
+  popular-pairs path is batch-friendly; arbitrary pairs aren't.
+
+The ranking is a starting point, not a decision. Pick what excites
+you — but if it's a ✗ or hybrid idea, the first deliverable should
+be the infra-decision PRD, not the user-facing feature.
 
 ---
 
