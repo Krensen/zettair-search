@@ -470,10 +470,19 @@
     .kp-summary-badge.news::before {
       background: #e8222a;
     }
+    /* Inline date stamp inside the "In the news" badge — sits to
+       the right of the badge text in a slightly muted, lower-weight
+       style so the date reads as a meta-detail, not part of the
+       badge label. */
     .kp-event-date {
-      font-size: 0.72rem;
-      color: #80868b;
-      margin: -0.35rem 0 0.5rem;
+      font-weight: 400;
+      letter-spacing: 0;
+      text-transform: none;
+      color: #b35900;
+      opacity: 0.75;
+      margin-left: 8px;
+      padding-left: 8px;
+      border-left: 1px solid rgba(179, 89, 0, 0.25);
     }
 
     .kp-summary {
@@ -1122,10 +1131,13 @@
       const isNewsSummary = data.summary_kind === 'news';
       const badgeText  = isNewsSummary ? 'In the news' : 'Summary';
       const badgeClass = isNewsSummary ? 'kp-summary-badge news' : 'kp-summary-badge';
-      const eventDateLabel = isNewsSummary && data.event_date
-        ? `<div class="kp-event-date">as of ${esc(data.event_date)}</div>` : '';
+      // Inline date as part of the badge content; "as of …" sits to
+      // the right of the badge text, separated by a thin rule.
+      const badgeInner = isNewsSummary && data.event_date
+        ? `${badgeText}<span class="kp-event-date">as of ${esc(data.event_date)}</span>`
+        : badgeText;
       const skeletonHtml = `
-        <div class="${badgeClass}">${badgeText}</div>
+        <div class="${badgeClass}">${badgeInner}</div>
         <div class="kp-skeleton" id="kpSkeleton" aria-busy="true" aria-label="Generating summary">
           <div class="line w95"></div>
           <div class="line w95"></div>
@@ -1180,8 +1192,7 @@
               '<path d="M5.5 7.5L10 12l4.5-4.5" stroke="currentColor" stroke-width="2" ' +
               'stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>';
             bodyEl.innerHTML =
-              '<div class="' + badgeClass + '">' + badgeText + '</div>' +
-              eventDateLabel +
+              '<div class="' + badgeClass + '">' + badgeInner + '</div>' +
               '<div class="kp-summary-wrap collapsed" id="kpSummaryWrap">' +
                 '<div class="kp-summary">' + renderedSummary + '</div>' +
                 '<button class="kp-toggle" type="button" id="kpToggle" ' +
