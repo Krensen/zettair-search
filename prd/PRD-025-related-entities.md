@@ -54,6 +54,15 @@ concept articles) are excluded from the graph itself — not the walk
 output — so disambiguation/trash-neighbour problems are solved at
 graph-construction time, not at output time.
 
+Within entities, **the related list is same-class only**: people get
+people, places get places, organisations get organisations. This
+matches the original Bing related-searches design and produces
+visibly crisper lists than a mixed-class rail. Cross-class signal
+still flows through random walks during scoring (a person who
+crosses through Manchester to reach Pep Guardiola is still
+plausibly related to other Manchester people); only the final
+ranked output is class-filtered.
+
 ---
 
 ## Non-goals
@@ -436,10 +445,22 @@ Could be very compelling visually. Future PRD.
   knowledge panel, the right rail sits alongside it. Both visible
   at once. Could feel busy. Worth a design pass when M4 lands.
 
-- **Per-class biases.** Should walks weight "same-class" neighbours
-  higher (so people-articles surface more people, not 50% places)?
-  Maybe. Default in v1: no class biasing. Tune in M5 if results look
-  weird.
+- **Per-class restriction.** Resolved: v1 hard-restricts related
+  results to the **same class** as the source. People-articles
+  show people. Place-articles show places. Organisation-articles
+  show organisations. Work-articles show works. Event-articles
+  show events. This was how Bing's original related-searches
+  worked, and it's the right call: within-class relations are
+  crisper ("Mark Carney → other politicians and economists" beats
+  "Mark Carney → mixed bag of people, Bank of Canada building,
+  city of Ottawa"), and the user mental model of "Related people /
+  places / organisations" is immediately graspable.
+  Implementation: enforce at output time by filtering the ranked
+  walk results to the source's class. Walks themselves are
+  unrestricted (cross-class walks may help propagate signal); only
+  the final list is filtered. Open question for M5: should the
+  rail header carry the class label (e.g. "Related people")?
+  Probably yes.
 
 - **Symmetric vs asymmetric relatedness.** Resolved: directional.
   The original Bing version was directional and the asymmetric
