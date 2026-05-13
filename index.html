@@ -736,19 +736,20 @@
       gap: 5px;
       height: 22px;
       padding: 0 10px 0 8px;
-      background: #e8f0fe;
+      background: #f1f3f4;       /* neutral grey, was tinted blue */
       border: 1px solid transparent;
       border-radius: 11px;
-      color: #1a73e8;
+      color: #5f6368;            /* secondary-text grey, was strong blue */
       font: inherit;
       font-size: 0.72rem;
       font-weight: 500;
       cursor: pointer;
       flex-shrink: 0;
-      transition: background 140ms ease, border-color 140ms ease;
+      transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
     }
     .cite-trigger:hover {
-      background: #d2e3fc;
+      background: #e8f0fe;       /* hint of blue tint only on hover */
+      color: #1a73e8;
     }
     .cite-trigger:focus-visible {
       outline: 2px solid #1a73e8;
