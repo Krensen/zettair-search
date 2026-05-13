@@ -436,4 +436,4 @@ Design decisions are recorded in `prd/`. Reading order if you're new to the code
 | PRD-022 | News-headline fallback — when Wikipedia has no recent event paragraph, fetch Google News RSS for the query and synthesise an event_paragraph from the top headlines. Same downstream pipeline as Wikipedia-sourced. | M1+M2 in. |
 | PRD-023 | Feature ideas backlog — long-form notes on differentiating features we could build (ask-a-question, compare view, timeline, cite-this, image grid, audio mode, etc.). Idea backlog, not a build plan. | Drafted. |
 | PRD-024 | Cite this — one-click APA / MLA / Chicago / Harvard / BibTeX citation popover on every result and the knowledge panel. Pure frontend. | M1-M2 live. |
-| PRD-025 | Related entities — random-walk graph over Wikipedia entity articles, surfaced as a right-rail panel of related entities on the results page. All offline batch on prod. | Drafted. |
+| PRD-025 | Related entities — random-walk graph over Wikipedia entity articles, surfaced as a right-rail panel of related entities on the results page. All offline batch on prod. | M1-M4 in. First-run build is multi-hour; subsequent rebuilds gated by staleness. |

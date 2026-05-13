@@ -104,6 +104,14 @@ SUMMARIES_STORE_PATH = os.environ.get("ZET_SUMMARIES_STORE", os.path.join(_wiki_
 SUMMARIES_MAP_PATH   = os.environ.get("ZET_SUMMARIES_MAP",   os.path.join(_wiki_dir, "summaries.map"))
 # PRD-020: trending pages. Written by tools/fetch_trending.py on a timer.
 TRENDING_CURRENT_PATH = os.environ.get("ZET_TRENDING_CURRENT", "/mnt/wikipedia-source/trending/current.json")
+# PRD-025: related entities. Built offline at index-rebuild time by
+# zettair/wikipedia/build_related.py. FlatStore keyed by docno; value
+# is a JSON array of [target_docno, score] pairs.
+RELATED_STORE_PATH = os.environ.get("ZET_RELATED_STORE", os.path.join(_wiki_dir, "related.store"))
+RELATED_MAP_PATH   = os.environ.get("ZET_RELATED_MAP",   os.path.join(_wiki_dir, "related.map"))
+# Per-docno class label so the frontend can render a class-aware rail
+# header ("Related people" / "Related places" / etc).
+RELATED_CLASS_PATH = os.environ.get("ZET_RELATED_CLASS", "/mnt/wikipedia-source/related/entity_class.json")
 
 _autosuggest: list = []   # sorted list of (query, count) tuples
 
@@ -166,6 +174,50 @@ _snippets_store  = FlatStore(SNIPPETS_STORE_PATH,  SNIPPETS_MAP_PATH,  "snippets
 _images_store    = FlatStore(IMAGES_STORE_PATH,    IMAGES_MAP_PATH,    "images")
 _urls_store      = FlatStore(URLS_STORE_PATH,      URLS_MAP_PATH,      "urls")
 _summaries_store = FlatStore(SUMMARIES_STORE_PATH, SUMMARIES_MAP_PATH, "summaries")
+_related_store   = FlatStore(RELATED_STORE_PATH,   RELATED_MAP_PATH,   "related")
+_related_class:  dict = {}   # PRD-025 docno -> class label, loaded at startup
+
+
+def _load_related_classes() -> None:
+    """Load entity_class.json into _related_class (mutated in place).
+    Missing file is fine — feature degrades to "no class on the rail
+    header"."""
+    if not os.path.exists(RELATED_CLASS_PATH):
+        print(f"WARNING: {RELATED_CLASS_PATH} not found — related-class headers disabled", flush=True)
+        return
+    try:
+        with open(RELATED_CLASS_PATH, encoding="utf-8") as f:
+            _related_class.update(json.load(f))
+        print(f"  related-class: {len(_related_class):,} entries", flush=True)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"WARNING: couldn't load {RELATED_CLASS_PATH}: {e}", flush=True)
+
+
+def _related_for(docno: str, n: int = 8) -> tuple[list[dict], str | None]:
+    """Return (items, source_class). Items is up to `n` dicts each
+    with docno + title + score. Empty list if no related data."""
+    if not docno:
+        return [], None
+    blob = _related_store.get(docno)
+    if not blob:
+        return [], None
+    try:
+        raw = json.loads(blob)
+    except json.JSONDecodeError:
+        return [], None
+    src_class = _related_class.get(docno)
+    items = []
+    for entry in raw[:n]:
+        try:
+            t_docno, score = entry[0], entry[1]
+        except (TypeError, IndexError):
+            continue
+        items.append({
+            "docno": t_docno,
+            "title": t_docno.replace("_", " "),
+            "score": score,
+        })
+    return items, src_class
 
 # PRD-018: shared normalisation for summary lookups. Same function must
 # be used by the offline summary generator and the live server.
@@ -379,6 +431,8 @@ async def lifespan(app: FastAPI):
     _images_store.load()
     _urls_store.load()
     _summaries_store.load()
+    _related_store.load()
+    _load_related_classes()
     _docstore.load()
     await _load_autosuggest()
     await _pool.start(ZET_WORKERS)
@@ -391,6 +445,7 @@ async def lifespan(app: FastAPI):
     _images_store.close()
     _urls_store.close()
     _summaries_store.close()
+    _related_store.close()
     _docstore.close()
     await _pool.shutdown()
 
@@ -550,6 +605,16 @@ async def search(
         response["summary_kind"] = summary_kind
         if event_date:
             response["event_date"] = event_date
+
+    # PRD-025: related entities for the top result, if any.
+    if results:
+        top_docno = results[0].get("docno")
+        related_items, related_class = _related_for(top_docno, n=8)
+        if related_items:
+            response["related"] = {
+                "source_class": related_class,
+                "items": related_items,
+            }
     return response
 
 

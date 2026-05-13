@@ -329,6 +329,56 @@
       padding: 0.5rem 1rem 3rem;
     }
 
+    /* PRD-025: right-rail "Related entities" panel. Sits to the right
+       of the results column at desktop widths. Hidden under 1100px
+       (where the results column is already crowding the viewport). */
+    .right-rail {
+      position: absolute;
+      top: 5rem;            /* aligns with first result roughly */
+      left: calc(max(1.5rem, 50vw - 490px) + 720px);
+      width: 280px;
+      max-width: 320px;
+    }
+    .related-panel {
+      background: #fafbfc;
+      border: 1px solid #e8eaed;
+      border-radius: 10px;
+      padding: 0.85rem 1rem;
+      display: none;
+    }
+    .related-panel.ready {
+      display: block;
+      animation: kp-summary-in 480ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+    }
+    .related-header {
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: #5f6368;
+      margin-bottom: 0.55rem;
+    }
+    .related-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    .related-item { margin: 0 0 0.35rem; }
+    .related-item:last-child { margin-bottom: 0; }
+    .related-item a {
+      display: block;
+      font-size: 0.86rem;
+      color: #1a0dab;
+      text-decoration: none;
+      line-height: 1.35;
+      padding: 2px 0;
+    }
+    .related-item a:hover { text-decoration: underline; }
+
+    @media (max-width: 1099px) {
+      .right-rail { display: none; }
+    }
+
     .results-meta {
       font-size: 0.8rem;
       color: #70757a;
@@ -1019,6 +1069,8 @@
     <div id="knowledgePanel"></div>
     <div id="resultsList"></div>
   </div>
+  <!-- PRD-025: right-rail "Related entities" panel, populated via doSearch -->
+  <aside class="right-rail" id="rightRail" aria-label="Related entities"></aside>
 </div>
 
 <script>
@@ -1106,6 +1158,7 @@
         resultsMeta.textContent = 'No results found.';
         resultsList.innerHTML = '';
         knowledgePanel.innerHTML = '';
+        renderRelatedRail(null);
         return;
       }
 
@@ -1249,6 +1302,11 @@
             ${thumb}
           </div>`;
       }).join('');
+
+      // PRD-025: right-rail Related entities panel. Hidden on narrow
+      // screens via CSS @media. We populate when the response carries
+      // a `related` block; otherwise the rail stays empty.
+      renderRelatedRail(data.related, q);
 
     } catch (err) {
       if (err.name === 'AbortError') return;
@@ -1448,6 +1506,48 @@
       setTimeout(start, 200);
     }
   })();
+
+  // PRD-025: render the right-rail "Related entities" panel from
+  // a /search response's `related` block. Passes through the source
+  // class so the header can read "Related people" / "Related places"
+  // etc. Clicking a related entity triggers a new search via the
+  // existing doSearch flow.
+  function renderRelatedRail(related, q) {
+    const rail = document.getElementById('rightRail');
+    if (!rail) return;
+    if (!related || !Array.isArray(related.items) || related.items.length === 0) {
+      rail.innerHTML = '';
+      return;
+    }
+    const CLASS_LABELS = {
+      human: 'Related people',
+      place: 'Related places',
+      organisation: 'Related organisations',
+      work: 'Related works',
+      event: 'Related events',
+    };
+    const header = CLASS_LABELS[related.source_class] || 'Related entities';
+    const list = related.items.map(it => {
+      const display = esc(it.title || it.docno || '');
+      const query   = (it.docno || '').replace(/_/g, ' ');
+      return '<li class="related-item">' +
+        '<a href="/?q=' + encodeURIComponent(query) + '" data-q="' + esc(query) + '">' +
+        display + '</a></li>';
+    }).join('');
+    rail.innerHTML =
+      '<div class="related-panel ready">' +
+        '<div class="related-header">' + esc(header) + '</div>' +
+        '<ul class="related-list">' + list + '</ul>' +
+      '</div>';
+    // Wire click → doSearch (no full navigation, just pushState swap)
+    rail.querySelectorAll('.related-item a').forEach(a => {
+      a.addEventListener('click', e => {
+        e.preventDefault();
+        const newQ = a.dataset.q;
+        if (newQ) doSearch(newQ);
+      });
+    });
+  }
 
   function logClick(q, docno, rank, score) {
     // Fire-and-forget — don't block navigation

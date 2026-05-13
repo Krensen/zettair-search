@@ -33,6 +33,11 @@ Environment=ZET_SUMMARIES_STORE=/mnt/wikipedia-source/summaries.store
 Environment=ZET_SUMMARIES_MAP=/mnt/wikipedia-source/summaries.map
 # PRD-020: trending chip-rail data. Written by zettair-trending.timer.
 Environment=ZET_TRENDING_CURRENT=/mnt/wikipedia-source/trending/current.json
+# PRD-025: related-entities graph + class info. Built offline at index
+# rebuild time by zettair/wikipedia/build_related.py.
+Environment=ZET_RELATED_STORE=/mnt/wikipedia-source/related.store
+Environment=ZET_RELATED_MAP=/mnt/wikipedia-source/related.map
+Environment=ZET_RELATED_CLASS=/mnt/wikipedia-source/related/entity_class.json
 
 # PRD-019: per-field BM25 (BM25F). Live. Sidecars index.field_lengths
 # and index.field_stats live next to the index and are auto-discovered

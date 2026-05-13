@@ -190,7 +190,7 @@ if [ ! -f "$SETUP_MARKER" ]; then
         git gcc make autoconf automake libtool pkg-config \
         libz-dev curl wget
 
-    dry pip3 install --quiet --break-system-packages fastapi uvicorn
+    dry pip3 install --quiet --break-system-packages fastapi uvicorn numpy
 
     log "Creating users..."
     if ! id "$DEPLOY_USER" &>/dev/null; then
@@ -206,6 +206,18 @@ if [ ! -f "$SETUP_MARKER" ]; then
 else
     skipped system-packages "marker $SETUP_MARKER present"
     log "System provisioned ($SETUP_MARKER exists) — skipping apt/useradd."
+fi
+
+### ── 1b. Late-added python deps (root, idempotent) ────────────────────────
+# These packages were added to the project after the original
+# /etc/zettair-setup-done marker was placed on prod, so the §1 block
+# wouldn't pick them up on re-run. Idempotent: pip exits 0 when
+# already satisfied.
+if ! python3 -c "import numpy" >/dev/null 2>&1; then
+    decided numpy "PRD-025 build_related.py needs numpy"
+    dry pip3 install --quiet --break-system-packages numpy
+else
+    skipped numpy "already installed"
 fi
 
 ### ── 2a. PRD-018 summariser group + sparky user (root) ──────────────────────
@@ -554,6 +566,62 @@ if [ -n "$DOCSTORE_REASON" ]; then
 else
     skipped docstore "docstore present and newer than TREC"
     log "docstore up to date — skipping."
+fi
+
+### ── 14b. PRD-025 related-entities graph (zettair, to volume) ──────────────
+#
+# Three-stage offline build:
+#   1. build_entity_set.py — classify docnos into human/place/org/work/event
+#   2. build_link_graph.py — extract entity→entity edges, write CSR
+#   3. build_related.py    — sampled random walks, write related.store +
+#                            related.map (FlatStore the server reads at boot)
+#
+# Staleness: each stage triggers if its output is missing or older than
+# its inputs. The whole chain runs cheaply on the second invocation
+# (everything skipped) when inputs haven't changed. Full first-time
+# build is multi-hour; subsequent rebuilds at corpus refresh time only.
+
+RELATED_DIR="$VOLUME/related"
+ENTITY_CLASSES="$VOLUME/entity_classes.json"
+RELATED_STORE="$VOLUME/related.store"
+RELATED_MAP="$VOLUME/related.map"
+
+if [ ! -f "$ENTITY_CLASSES" ] || [ "$BZ2_FILE" -nt "$ENTITY_CLASSES" ]; then
+    decided entity-classes "missing or stale wrt enwiki dump"
+    log "Running build_entity_set.py (1-2 hours)..."
+    as_zettair python3 "$WIKI_DIR/build_entity_set.py" \
+        --enwiki-dump "$BZ2_FILE" \
+        --titles      "$TITLES_FILE" \
+        --out         "$ENTITY_CLASSES"
+    log "entity_classes.json written to $ENTITY_CLASSES"
+else
+    skipped entity-classes "present and newer than enwiki dump"
+fi
+
+GRAPH_OFFSETS="$RELATED_DIR/graph.offsets.bin"
+if [ ! -f "$GRAPH_OFFSETS" ] || [ "$ENTITY_CLASSES" -nt "$GRAPH_OFFSETS" ]; then
+    decided link-graph "missing or stale wrt entity_classes.json"
+    as_zettair mkdir -p "$RELATED_DIR"
+    log "Running build_link_graph.py (1-2 hours)..."
+    as_zettair python3 "$WIKI_DIR/build_link_graph.py" \
+        --enwiki-dump     "$BZ2_FILE" \
+        --entity-classes  "$ENTITY_CLASSES" \
+        --out-dir         "$RELATED_DIR"
+    log "link graph written to $RELATED_DIR"
+else
+    skipped link-graph "present and newer than entity_classes.json"
+fi
+
+if [ ! -f "$RELATED_STORE" ] || [ "$GRAPH_OFFSETS" -nt "$RELATED_STORE" ]; then
+    decided related-store "missing or stale wrt graph"
+    log "Running build_related.py (~1-2 hours)..."
+    as_zettair python3 "$WIKI_DIR/build_related.py" \
+        --graph-dir "$RELATED_DIR" \
+        --out-store "$RELATED_STORE" \
+        --out-map   "$RELATED_MAP"
+    log "related.store + related.map written"
+else
+    skipped related-store "present and newer than graph"
 fi
 
 ### ── 15. Build URLs store if missing (zettair, to volume) ──────────────────
