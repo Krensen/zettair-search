@@ -424,9 +424,10 @@ Could be very compelling visually. Future PRD.
   is offline and complete; API is live and rate-limited. Dump wins
   for v1 (rebuilds are infrequent).
 
-- **Restart probability α.** 0.15 is the SimRank/PageRank default.
-  Could be lower (longer walks, broader related) or higher (more
-  source-anchored). Tune in M5.
+- **Restart probability α.** 0.15 is the SimRank/PageRank default
+  and the right starting point. Bing's setting from the original
+  build isn't remembered; we'll sweep {0.05, 0.10, 0.15, 0.30} in
+  M5 against a hand-graded set and pick.
 
 - **Should we surface relatedness scores in the panel?** Probably no
   — score numbers feel academic. Just show the ordered list.
