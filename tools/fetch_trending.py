@@ -127,7 +127,7 @@ NEWS_RSS_URL_TEMPLATE   = (
     "q={q}&hl=en-US&gl=US&ceid=US:en"
 )
 NEWS_FETCH_TIMEOUT_S    = 8
-NEWS_CACHE_HOURS        = int(os.environ.get("ZET_NEWS_CACHE_HOURS", "6"))
+NEWS_CACHE_HOURS        = int(os.environ.get("ZET_NEWS_CACHE_HOURS", "3"))
 NEWS_FRESHNESS_DAYS     = 14
 NEWS_MAX_HEADLINES      = 5
 NEWS_MIN_HEADLINES      = 2     # below this we don't fall back at all
@@ -137,6 +137,78 @@ NEWS_CACHE_DIR          = TRENDING_DIR / "news_cache"
 # Taylor Swift). Disabled by default; can be re-enabled if we see
 # wrong-entity drift in practice.
 NEWS_QUERY_QUALIFIER    = ""
+
+# -- PRD-026: quality filters -----------------------------------------------
+# Applied to the union of all candidate sources (spike + Google News
+# top-stories + Wikipedia ITN). Drops noise before items reach the rail.
+QUALITY_HEADLINE_MAX_AGE_DAYS = 7   # top Google News headline must be this fresh
+QUALITY_STALE_OBIT_DAYS       = 30  # dead-person + obit-headlines + older than this -> drop
+
+# Mainstream news outlets — at least one of the top-3 headlines must
+# come from one of these for a candidate to pass the quality filter.
+# Hand-curated; biased toward English-language outlets but covers most
+# major regions. Tunable list — easy to expand if we see legit news
+# being filtered.
+MAINSTREAM_SOURCES_RE = re.compile(
+    r"\b(bbc|reuters|new york times|nytimes|the times|the guardian|"
+    r"washington post|associated press|\bap\b|bloomberg|the independent|"
+    r"financial times|\bft\b|the hindu|the economist|al jazeera|cnn|"
+    r"npr|abc news|cbs news|nbc news|sky news|the telegraph|"
+    r"the times of india|the wall street journal|wsj|the atlantic|"
+    r"politico|axios|propublica|the conversation|the wire|"
+    r"bloomberg news|cnbc|forbes|fortune|reuters world|"
+    r"the new yorker|economic times|hindustan times|le monde|"
+    r"der spiegel|deutsche welle|france 24|abc \(australia\)|"
+    r"the sydney morning herald|the age|stuff|nz herald)\b",
+    re.I,
+)
+
+# Marketing-pattern phrases that indicate a self-promo / recap / clickbait
+# headline rather than real news. Extended set after PRD-026 analysis.
+MARKETING_RE = re.compile(
+    r"\b(trailer|teaser|poster|release date|cast announced|first look|"
+    r"premieres|opening weekend|box office|behind the scenes|featurette|"
+    r"special presentation|streaming now|now streaming|new episode|"
+    r"season \d+ episode|episode \d+|easter eggs|ending explained|"
+    r"how to watch|where to watch|free download|streaming guide|"
+    r"watch online|in theaters|in cinemas|now playing|"
+    r"binge guide|recap|review:)\b",
+    re.I,
+)
+
+# Obituary-flavoured headlines. Used as part of the stale-obituary check.
+OBIT_RE = re.compile(
+    r"\b(died|death|passed away|obituary|remembered|tribute|"
+    r"anniversary of (his|her|their) death|posthumous|"
+    r"in memoriam|memorial)\b",
+    re.I,
+)
+
+# Where to cache per-docno "is in deaths-YYYY category" lookups (24h TTL).
+DEATH_CACHE_PATH = TRENDING_DIR / "death_cache.json"
+DEATH_CACHE_TTL_HOURS = 24
+
+# -- PRD-026: Google News top stories ---------------------------------------
+GOOGLE_TOP_URL          = "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en"
+GOOGLE_TOP_CACHE_PATH   = TRENDING_DIR / "google_top_cache.json"
+GOOGLE_TOP_CACHE_HOURS  = 3        # match the trending cadence
+GOOGLE_TOP_MAX_ITEMS    = 50       # how many to keep per fetch
+ENTITY_TITLES_PATH      = Path(os.environ.get(
+    "ZET_ENTITY_TITLES",
+    "/mnt/wikipedia-source/related/entity_titles.tsv",
+))
+
+# -- PRD-026: Wikipedia In-the-news -----------------------------------------
+WIKI_ITN_URL_TEMPLATE   = (
+    "https://api.wikimedia.org/feed/v1/wikipedia/en/featured/"
+    "{year}/{month:02d}/{day:02d}"
+)
+WIKI_ITN_CACHE_PATH     = TRENDING_DIR / "wiki_itn_cache.json"
+WIKI_ITN_CACHE_HOURS    = 24       # portal updates daily
+
+# Cap on the final rail size after the quality filter.
+# This already lives further up as RAIL_MAX; keeping the reference here
+# to make it explicit which constant bounds the output.
 
 # Dump URL template. {Y}/{Y-M}/pageviews-{YMD}-{HH}0000.gz
 DUMP_URL_TEMPLATE = (
@@ -726,10 +798,10 @@ def _parse_rss_pubdate(s: str) -> dt.datetime | None:
         return None
 
 
-def _parse_news_rss(xml_bytes: bytes, today: dt.date) -> list[dict]:
+def _parse_news_rss(xml_bytes: bytes, today: dt.date, max_items: int | None = None) -> list[dict]:
     """Parse a Google News RSS response into a list of headline dicts.
     Filters out items older than NEWS_FRESHNESS_DAYS and in the future.
-    Returns at most NEWS_MAX_HEADLINES, newest first."""
+    Returns at most `max_items` (default NEWS_MAX_HEADLINES) newest first."""
     import xml.etree.ElementTree as ET
     try:
         root = ET.fromstring(xml_bytes)
@@ -767,7 +839,7 @@ def _parse_news_rss(xml_bytes: bytes, today: dt.date) -> list[dict]:
             "pub_date": pub.isoformat(),
         })
     items.sort(key=lambda h: h["pub_date"], reverse=True)
-    return items[:NEWS_MAX_HEADLINES]
+    return items[:(max_items if max_items is not None else NEWS_MAX_HEADLINES)]
 
 
 def fetch_news_headlines(query: str, today: dt.date | None = None) -> list[dict]:
@@ -870,6 +942,278 @@ def synthesise_news_paragraph(display_title: str, headlines: list[dict]) -> str 
     return "\n".join(lines)
 
 
+# -- PRD-026: death-category lookup (24h cached) ----------------------------
+
+_DEATH_CACHE: dict | None = None
+
+
+def _load_death_cache() -> dict:
+    global _DEATH_CACHE
+    if _DEATH_CACHE is not None:
+        return _DEATH_CACHE
+    if DEATH_CACHE_PATH.exists():
+        try:
+            _DEATH_CACHE = json.loads(DEATH_CACHE_PATH.read_text())
+            return _DEATH_CACHE
+        except (OSError, json.JSONDecodeError):
+            pass
+    _DEATH_CACHE = {}
+    return _DEATH_CACHE
+
+
+def _save_death_cache(cache: dict) -> None:
+    try:
+        DEATH_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = DEATH_CACHE_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(cache, separators=(",", ":")))
+        os.replace(tmp, DEATH_CACHE_PATH)
+    except OSError:
+        pass
+
+
+def fetch_death_year(docno: str) -> int | None:
+    """Returns the YYYY of the docno's 'YYYY deaths' category if any,
+    or None. Cached on disk for DEATH_CACHE_TTL_HOURS."""
+    cache = _load_death_cache()
+    now = dt.datetime.now(dt.UTC)
+    entry = cache.get(docno)
+    if entry:
+        try:
+            fetched_at = dt.datetime.strptime(entry["fetched_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.UTC)
+            if (now - fetched_at).total_seconds() / 3600 <= DEATH_CACHE_TTL_HOURS:
+                return entry.get("death_year")
+        except (KeyError, ValueError):
+            pass
+    url = ("https://en.wikipedia.org/w/api.php?action=query&prop=categories"
+           f"&cllimit=30&titles={urllib.parse.quote(docno)}&format=json")
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    death_year: int | None = None
+    try:
+        with urllib.request.urlopen(req, timeout=8) as r:
+            d = json.load(r)
+        for page in (d.get("query") or {}).get("pages", {}).values():
+            for c in page.get("categories", []) or []:
+                title = (c.get("title") or "").replace("Category:", "")
+                m = re.match(r"^(\d{4}) deaths$", title)
+                if m:
+                    death_year = int(m.group(1))
+                    break
+            if death_year is not None:
+                break
+    except Exception:
+        # Network / parse errors — don't poison cache, just return unknown.
+        return None
+    cache[docno] = {
+        "death_year": death_year,
+        "fetched_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    _save_death_cache(cache)
+    return death_year
+
+
+# -- PRD-026: quality filter -----------------------------------------------
+
+def quality_check(docno: str, headlines: list[dict], today: dt.date) -> tuple[bool, str]:
+    """Run the four PRD-026 quality rules. Returns (ok, reason).
+
+    Order matters; first failure wins so the reason string surfaces the
+    most actionable cause."""
+    if not headlines:
+        return False, "no headlines"
+
+    # 1. Stale obituary: dead-year category + obit-flavoured top
+    # headlines + top headline > 30 days old.
+    death_year = fetch_death_year(docno)
+    if death_year is not None:
+        obit_in_top3 = any(OBIT_RE.search(h.get("title", "")) for h in headlines[:3])
+        try:
+            top_pub = dt.datetime.fromisoformat(headlines[0]["pub_date"]).date()
+            age_days = (today - top_pub).days
+        except (KeyError, ValueError):
+            age_days = 9999
+        if obit_in_top3 and age_days > QUALITY_STALE_OBIT_DAYS:
+            return False, f"stale obituary ({death_year} deaths; headline {age_days}d old)"
+
+    # 2. Marketing pattern in top 3 headlines.
+    for h in headlines[:3]:
+        if MARKETING_RE.search(h.get("title", "")):
+            return False, f"marketing pattern: {h['title'][:60]!r}"
+
+    # 3. Top headline must be ≤QUALITY_HEADLINE_MAX_AGE_DAYS old.
+    try:
+        top_pub = dt.datetime.fromisoformat(headlines[0]["pub_date"]).date()
+        age_days = (today - top_pub).days
+    except (KeyError, ValueError):
+        return False, "top headline has unparseable pub_date"
+    if age_days > QUALITY_HEADLINE_MAX_AGE_DAYS:
+        return False, f"top headline {age_days}d old (>{QUALITY_HEADLINE_MAX_AGE_DAYS}d)"
+
+    # 4. At least one mainstream source in top 3.
+    sources = [h.get("source", "") for h in headlines[:3]]
+    if not any(MAINSTREAM_SOURCES_RE.search(s) for s in sources):
+        return False, f"no mainstream source in top 3 (saw: {', '.join(sources) or 'none'})"
+
+    return True, "ok"
+
+
+# -- PRD-026: Google News top stories ---------------------------------------
+
+# Cached entity title → docno reverse map. Loaded lazily from
+# entity_titles.tsv (built alongside entity_classes.json by
+# build_entity_set.py).
+_ENTITY_TITLE_INDEX: dict[str, str] | None = None
+_ENTITY_TITLE_TOKENS: set[str] | None = None
+
+
+def _load_entity_title_index() -> tuple[dict[str, str], set[str]]:
+    """Load entity_titles.tsv as a lowercase-title → docno map. Returns
+    ({lowercased_title: docno}, set_of_all_single_word_tokens). The
+    token set is used to short-circuit headlines that contain no
+    plausible entity reference."""
+    global _ENTITY_TITLE_INDEX, _ENTITY_TITLE_TOKENS
+    if _ENTITY_TITLE_INDEX is not None and _ENTITY_TITLE_TOKENS is not None:
+        return _ENTITY_TITLE_INDEX, _ENTITY_TITLE_TOKENS
+    idx: dict[str, str] = {}
+    tokens: set[str] = set()
+    if ENTITY_TITLES_PATH.exists():
+        with open(ENTITY_TITLES_PATH, encoding="utf-8") as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line or "\t" not in line:
+                    continue
+                docno, display = line.split("\t", 1)
+                display_lc = display.lower()
+                idx.setdefault(display_lc, docno)
+                # Multi-word: also keep token-level entries for fast
+                # filtering, but don't override exact-title matches.
+                for w in re.findall(r"[A-Za-z][A-Za-z0-9'-]+", display):
+                    if len(w) >= 3:
+                        tokens.add(w.lower())
+    _ENTITY_TITLE_INDEX = idx
+    _ENTITY_TITLE_TOKENS = tokens
+    log_dummy_cfg = None  # log() requires cfg; print here is fine before main()
+    print(f"loaded entity title index: {len(idx):,} titles, "
+          f"{len(tokens):,} tokens", flush=True)
+    return idx, tokens
+
+
+def _headline_to_docnos(headline_title: str) -> list[str]:
+    """Map a Google News headline to candidate docnos. Tries longest-
+    multi-word match first, then individual capitalised proper-noun
+    sequences. Returns up to 3 docnos."""
+    idx, tokens = _load_entity_title_index()
+    if not idx:
+        return []
+    text = headline_title
+    text_lc = text.lower()
+    matched: list[str] = []
+    # Try multi-word proper-noun spans: "[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+"
+    # (e.g. "Mark Carney", "Wes Streeting", "Bank of England").
+    for m in re.finditer(r"\b[A-Z][a-zA-Z'-]+(?:\s+[A-Z][a-zA-Z'-]+){0,5}\b", text):
+        span = m.group(0).strip().lower()
+        if span in idx and idx[span] not in matched:
+            matched.append(idx[span])
+            if len(matched) >= 3:
+                break
+    # Also try simpler approach: any 2-4 consecutive capitalised words
+    # that aren't already matched.
+    return matched
+
+
+def fetch_google_top_stories(today: dt.date) -> list[dict]:
+    """Pull Google News top-stories RSS. Returns a list of dicts with
+    title/source/pub_date/docnos (Wikipedia mappings, may be empty).
+    Disk-cached for GOOGLE_TOP_CACHE_HOURS."""
+    now = dt.datetime.now(dt.UTC)
+    GOOGLE_TOP_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if GOOGLE_TOP_CACHE_PATH.exists():
+        try:
+            payload = json.loads(GOOGLE_TOP_CACHE_PATH.read_text(encoding="utf-8"))
+            fetched_at = dt.datetime.strptime(payload["fetched_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.UTC)
+            if (now - fetched_at).total_seconds() / 3600 <= GOOGLE_TOP_CACHE_HOURS:
+                return payload.get("stories", [])
+        except (OSError, KeyError, ValueError, json.JSONDecodeError):
+            pass
+
+    req = urllib.request.Request(GOOGLE_TOP_URL, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=NEWS_FETCH_TIMEOUT_S) as r:
+            data = r.read()
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return []
+    stories = _parse_news_rss(data, today, max_items=GOOGLE_TOP_MAX_ITEMS)
+    # Annotate each with candidate docnos.
+    for s in stories[:GOOGLE_TOP_MAX_ITEMS]:
+        s["docnos"] = _headline_to_docnos(s.get("title", ""))
+    stories = stories[:GOOGLE_TOP_MAX_ITEMS]
+
+    try:
+        tmp = GOOGLE_TOP_CACHE_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(
+            {"fetched_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "stories": stories},
+            separators=(",", ":"),
+        ), encoding="utf-8")
+        os.replace(tmp, GOOGLE_TOP_CACHE_PATH)
+    except OSError:
+        pass
+    return stories
+
+
+# -- PRD-026: Wikipedia "In the news" portal --------------------------------
+
+def fetch_wikipedia_itn(today: dt.date) -> list[dict]:
+    """Pull the wikimedia featured-feed for today and extract the
+    'news' array. Each entry has a `story` HTML blurb and a `links`
+    array with full article objects. Returns a list of dicts with
+    docno + display_title. 24h disk-cached."""
+    now = dt.datetime.now(dt.UTC)
+    WIKI_ITN_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if WIKI_ITN_CACHE_PATH.exists():
+        try:
+            payload = json.loads(WIKI_ITN_CACHE_PATH.read_text(encoding="utf-8"))
+            fetched_at = dt.datetime.strptime(payload["fetched_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.UTC)
+            if (now - fetched_at).total_seconds() / 3600 <= WIKI_ITN_CACHE_HOURS:
+                return payload.get("items", [])
+        except (OSError, KeyError, ValueError, json.JSONDecodeError):
+            pass
+
+    url = WIKI_ITN_URL_TEMPLATE.format(year=today.year, month=today.month, day=today.day)
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=NEWS_FETCH_TIMEOUT_S) as r:
+            payload = json.load(r)
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+        return []
+
+    items: list[dict] = []
+    seen: set[str] = set()
+    for story in payload.get("news", []) or []:
+        story_html = story.get("story") or ""
+        # Strip HTML for the blurb
+        blurb = re.sub(r"<[^>]+>", "", story_html).strip()
+        for link in story.get("links", []) or []:
+            canonical = (link.get("titles") or {}).get("canonical")
+            if not canonical or canonical in seen:
+                continue
+            seen.add(canonical)
+            items.append({
+                "docno": canonical,
+                "title": link.get("titles", {}).get("normalized") or canonical.replace("_", " "),
+                "story_blurb": blurb[:280],
+            })
+
+    try:
+        tmp = WIKI_ITN_CACHE_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(
+            {"fetched_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "items": items},
+            separators=(",", ":"),
+        ), encoding="utf-8")
+        os.replace(tmp, WIKI_ITN_CACHE_PATH)
+    except OSError:
+        pass
+    return items
+
+
 def apply_specificity_gate(items: list[dict]) -> list[dict]:
     """For each item, fetch its Wikipedia article and try to find a
     recent dated event paragraph. Items that have one gain
@@ -943,23 +1287,160 @@ def apply_specificity_gate(items: list[dict]) -> list[dict]:
 
 
 def recompute_and_write() -> None:
-    """Recompute current.json from history + apply specificity gate."""
+    """Recompute current.json. PRD-026 changes:
+
+      1. Gather candidates from THREE sources (spike pipeline,
+         Google News top stories, Wikipedia In-the-news portal).
+      2. Run the specificity gate (existing) on the union.
+      3. Apply PRD-026 quality filter (stale-obit / marketing /
+         7d-recency / mainstream-source).
+      4. Source-weighted sort: Google News first, then spike, then
+         Wikipedia ITN. Cap at RAIL_MAX.
+    """
+    today = dt.datetime.now(dt.UTC).date()
     history = read_history()
     denyset = load_user_denylist()
     payload = compute_current(history, denyset)
-    log(f"pre-gate: mode={payload['mode']} items={len(payload['items'])}")
-    if payload["mode"] == "spike" and payload["items"]:
-        _prune_news_cache()   # cheap; runs once per cycle
-        kept, stats = apply_specificity_gate(payload["items"])
-        log(f"specificity gate: checked={stats['checked']} kept={stats['kept']} "
-            f"with_para_wiki={stats['with_para_wiki']} "
-            f"with_para_rss={stats['with_para_rss']} "
-            f"without_para={stats['without_para']} "
-            f"dropped_fetch={stats['dropped_fetch']}")
-        payload["items"] = kept
+    spike_items = payload.get("items", []) if payload.get("mode") == "spike" else []
+    log(f"pre-gate: mode={payload['mode']} spike_items={len(spike_items)}")
+    _prune_news_cache()
+
+    # Source 1: spike pipeline. Tag and keep.
+    for it in spike_items:
+        it["source"] = "spike"
+        it["source_rank"] = it.get("rank", 9999)
+
+    # Source 2: Google News top stories.
+    google_items: list[dict] = []
+    try:
+        gs = fetch_google_top_stories(today)
+    except Exception as e:
+        log(f"google-top-stories fetch failed: {type(e).__name__}: {e}")
+        gs = []
+    seen_docnos = {it.get("docno") for it in spike_items if it.get("docno")}
+    for rank, story in enumerate(gs, 1):
+        for docno in story.get("docnos", []) or []:
+            if not docno or docno in seen_docnos:
+                continue
+            if is_denied(docno, denyset):
+                continue
+            seen_docnos.add(docno)
+            google_items.append({
+                "query": docno.replace("_", " ").lower(),
+                "title": docno.replace("_", " "),
+                "docno": docno,
+                "source": "google_news",
+                "source_rank": rank,
+                # event_paragraph populated later by the specificity gate or
+                # by news-headline fallback
+            })
+
+    # Source 3: Wikipedia In-the-news.
+    wiki_items: list[dict] = []
+    try:
+        itn = fetch_wikipedia_itn(today)
+    except Exception as e:
+        log(f"wiki-itn fetch failed: {type(e).__name__}: {e}")
+        itn = []
+    for rank, link in enumerate(itn, 1):
+        docno = link.get("docno")
+        if not docno or docno in seen_docnos:
+            continue
+        if is_denied(docno, denyset):
+            continue
+        seen_docnos.add(docno)
+        wiki_items.append({
+            "query": docno.replace("_", " ").lower(),
+            "title": link.get("title") or docno.replace("_", " "),
+            "docno": docno,
+            "source": "wiki_itn",
+            "source_rank": rank,
+            "story_blurb": link.get("story_blurb"),
+        })
+
+    log(f"sources: spike={len(spike_items)} google_news={len(google_items)} wiki_itn={len(wiki_items)}")
+    union = spike_items + google_items + wiki_items
+    log(f"union (post-dedupe): {len(union)} candidates")
+
+    # Specificity gate (Wikipedia event-paragraph or Google News RSS
+    # fallback) — populates event_paragraph for items that have any
+    # news content. Items without one stay; the quality filter below
+    # will reject those that also lack headlines.
+    if union:
+        gated, gate_stats = apply_specificity_gate(union)
+        log(f"specificity gate: checked={gate_stats['checked']} kept={gate_stats['kept']} "
+            f"with_para_wiki={gate_stats['with_para_wiki']} "
+            f"with_para_rss={gate_stats['with_para_rss']} "
+            f"without_para={gate_stats['without_para']} "
+            f"dropped_fetch={gate_stats['dropped_fetch']}")
+    else:
+        gated = []
+
+    # Quality filter on the gated union. Cached headlines are already
+    # in the news cache from the specificity gate's RSS-fallback pass,
+    # so this is cheap.
+    quality_kept: list[dict] = []
+    n_stale_obit = n_marketing = n_stale_news = n_non_mainstream = n_no_headlines = 0
+    for it in gated:
+        docno = it.get("docno") or it.get("title", "").replace(" ", "_")
+        query = it.get("query") or docno.replace("_", " ").lower()
+        # Hit the cached headlines (same call the RSS fallback used).
+        headlines = fetch_news_headlines_cached(query, today=today)
+        ok, reason = quality_check(docno, headlines, today)
+        if not ok:
+            if "stale obituary" in reason:
+                n_stale_obit += 1
+            elif "marketing" in reason:
+                n_marketing += 1
+            elif "old" in reason or "unparseable" in reason:
+                n_stale_news += 1
+            elif "mainstream" in reason:
+                n_non_mainstream += 1
+            else:
+                n_no_headlines += 1
+            it["_filter_reject"] = reason
+            continue
+        # Pass; remember the top headline + filter trace.
+        if headlines:
+            it["top_headline"] = {
+                "title": headlines[0].get("title"),
+                "source": headlines[0].get("source"),
+                "pub_date": headlines[0].get("pub_date"),
+            }
+        quality_kept.append(it)
+
+    log(
+        f"quality filter: kept={len(quality_kept)} dropped="
+        f"stale_obit={n_stale_obit} marketing={n_marketing} "
+        f"stale_news={n_stale_news} non_mainstream={n_non_mainstream} "
+        f"no_headlines={n_no_headlines}"
+    )
+
+    # Source-weighted sort: google_news → spike → wiki_itn within each
+    # source by source_rank. Then cap at RAIL_MAX.
+    source_priority = {"google_news": 0, "spike": 1, "wiki_itn": 2}
+    quality_kept.sort(key=lambda it: (
+        source_priority.get(it.get("source", "spike"), 3),
+        it.get("source_rank", 9999),
+    ))
+    quality_kept = quality_kept[:RAIL_MAX]
+
+    # Build the payload to write. Mode stays "spike" for backwards
+    # compatibility with the server / frontend logic (they treat "spike"
+    # as "there's content; show the rail"). When everything's filtered
+    # out we still write an empty items[] so the rail hides itself.
+    final_mode = "spike" if quality_kept else "raw"
+    payload["mode"] = final_mode
+    payload["items"] = quality_kept
+
     write_current(payload)
     update_recently_seen(payload)
-    log(f"wrote current.json: mode={payload['mode']} items={len(payload['items'])}")
+    log(
+        f"wrote current.json: mode={final_mode} items={len(quality_kept)} "
+        f"by_source: google={sum(1 for i in quality_kept if i.get('source')=='google_news')} "
+        f"spike={sum(1 for i in quality_kept if i.get('source')=='spike')} "
+        f"wiki_itn={sum(1 for i in quality_kept if i.get('source')=='wiki_itn')}"
+    )
 
 
 # -- compaction -------------------------------------------------------------

@@ -608,11 +608,13 @@ else
         else
             decided entity-classes "missing or stale wrt enwiki dump"
             log "Running build_entity_set.py (1-2 hours)..."
+            as_zettair mkdir -p "$RELATED_DIR"
             as_zettair python3 "$WIKI_DIR/build_entity_set.py" \
                 --enwiki-dump "$BZ2_FILE" \
                 --titles      "$TITLES_FILE" \
-                --out         "$ENTITY_CLASSES"
-            log "entity_classes.json written to $ENTITY_CLASSES"
+                --out         "$ENTITY_CLASSES" \
+                --titles-out  "$RELATED_DIR/entity_titles.tsv"
+            log "entity_classes.json + entity_titles.tsv written"
         fi
     else
         skipped entity-classes "present and newer than enwiki dump"

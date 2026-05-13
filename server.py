@@ -789,6 +789,10 @@ async def trending(n: int = Query(8, ge=1, le=50)):
             "query": it["query"],
             "title": it["title"],
             "in_index": in_index,
+            # PRD-026: which source surfaced this chip. Used by the
+            # frontend for source-aware labels/icons if desired. Items
+            # written before PRD-026 land here as "spike" by default.
+            "source": it.get("source", "spike"),
         }
         if not in_index and docno:
             entry["wiki_url"] = f"https://en.wikipedia.org/wiki/{docno}"

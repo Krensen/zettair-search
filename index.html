@@ -1467,7 +1467,10 @@
         .then(data => {
           if (!data || !Array.isArray(data.items) || data.items.length === 0) return;
           const isSpike = data.mode === 'spike';
-          const labelText = isSpike ? 'Trending' : 'Popular';
+          // PRD-026: rail now sources from spike + Google News + Wikipedia
+          // ITN, so "News" reads more honestly than "Trending". "Popular"
+          // still applies for the first-week raw-mode fallback.
+          const labelText = isSpike ? 'News' : 'Popular';
           const labelIcon = isSpike ? TREND_ICON : SPARK_ICON;
           const inner = document.createElement('div');
           inner.className = 'trending-rail-inner';
