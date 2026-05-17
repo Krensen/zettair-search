@@ -177,6 +177,9 @@ populate_fully_built() {
     touch -t 202401040000 "$SANDBOX/volume/enwiki_top1m_urls.store"
     touch -t 202401040000 "$SANDBOX/volume/enwiki_top1m_urls.map"
 
+    # PRD-027: reading sidecar (derived from docstore; same mtime fine)
+    touch -t 202401040000 "$SANDBOX/volume/enwiki_top1m.reading.bin"
+
     # zet binary (ELF-ish — we fake the file file-magic check by
     # making it a real ELF if possible, or by stubbing `file`)
     cat > "$SANDBOX/install/zettair/devel/zet" <<'EOF'
@@ -241,6 +244,7 @@ EOF
     assert_decided click-prior || ok=0
     assert_decided autosuggest || ok=0
     assert_decided docstore || ok=0
+    assert_decided reading-sidecar || ok=0
     assert_decided systemd-unit || ok=0
     [ $ok -eq 1 ]
 }
@@ -257,6 +261,7 @@ s02_no_op() {
     assert_skipped click-prior || ok=0
     assert_skipped autosuggest || ok=0
     assert_skipped docstore || ok=0
+    assert_skipped reading-sidecar || ok=0
     assert_skipped urls-store || ok=0
     # systemd unit + restart always happen
     assert_decided systemd-unit || ok=0

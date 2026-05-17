@@ -93,6 +93,8 @@ DOCMAP="$VOLUME/enwiki_top1m.docmap"
 AUTOSUGGEST="$VOLUME/autosuggest.json"
 URLS_STORE="$VOLUME/enwiki_top1m_urls.store"
 URLS_MAP="$VOLUME/enwiki_top1m_urls.map"
+# PRD-027: reading-time + difficulty sidecar
+READING_SIDECAR="$VOLUME/enwiki_top1m.reading.bin"
 
 ### ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -582,6 +584,31 @@ if [ -n "$DOCSTORE_REASON" ]; then
 else
     skipped docstore "docstore present and newer than TREC"
     log "docstore up to date — skipping."
+fi
+
+### ── 14a. PRD-027 reading-time + difficulty sidecar ────────────────────────
+#
+# Stale if the docstore is newer. Single-pass walk over the docstore,
+# ~5-10 min on the full corpus. Output is ~9 MB; server mmaps it
+# into RAM at startup.
+
+READING_REASON=""
+if [ ! -f "$READING_SIDECAR" ]; then
+    READING_REASON="reading sidecar missing"
+elif [ -e "$DOCSTORE" ] && [ "$DOCSTORE" -nt "$READING_SIDECAR" ]; then
+    READING_REASON="docstore newer than reading sidecar"
+fi
+if [ -n "$READING_REASON" ]; then
+    decided reading-sidecar "$READING_REASON"
+    log "Building reading-time + difficulty sidecar (5-10 min)..."
+    as_zettair python3 "$SEARCH_DIR/tools/build_reading_sidecar.py" \
+        --docstore "$DOCSTORE" \
+        --docmap   "$DOCMAP" \
+        --output   "$READING_SIDECAR"
+    log "reading sidecar written to $READING_SIDECAR"
+else
+    skipped reading-sidecar "present and newer than docstore"
+    log "reading sidecar up to date — skipping."
 fi
 
 ### ── 14b. PRD-025 related-entities graph (zettair, to volume) ──────────────

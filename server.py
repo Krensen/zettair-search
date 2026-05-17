@@ -112,6 +112,10 @@ RELATED_MAP_PATH   = os.environ.get("ZET_RELATED_MAP",   os.path.join(_wiki_dir,
 # Per-docno class label so the frontend can render a class-aware rail
 # header ("Related people" / "Related places" / etc).
 RELATED_CLASS_PATH = os.environ.get("ZET_RELATED_CLASS", "/mnt/wikipedia-source/related/entity_class.json")
+# PRD-027: reading-time + difficulty sidecar. Packed binary written by
+# tools/build_reading_sidecar.py; loaded into RAM at startup.
+READING_SIDECAR_PATH = os.environ.get("ZET_READING_SIDECAR",
+                                      os.path.join(_wiki_dir, "enwiki_top1m.reading.bin"))
 
 _autosuggest: list = []   # sorted list of (query, count) tuples
 
@@ -176,6 +180,43 @@ _urls_store      = FlatStore(URLS_STORE_PATH,      URLS_MAP_PATH,      "urls")
 _summaries_store = FlatStore(SUMMARIES_STORE_PATH, SUMMARIES_MAP_PATH, "summaries")
 _related_store   = FlatStore(RELATED_STORE_PATH,   RELATED_MAP_PATH,   "related")
 _related_class:  dict = {}   # PRD-025 docno -> class label, loaded at startup
+
+# PRD-027: docno -> reading_time_min and docno -> difficulty.
+# Two parallel dicts so each lookup is one hash. Missing docno => no pills.
+_reading_time: dict[str, int] = {}
+_difficulty:   dict[str, str] = {}
+_DIFF_CODE_TO_LABEL = {1: "accessible", 2: "moderate", 3: "technical"}
+
+
+def _load_reading_sidecar() -> None:
+    """Load the PRD-027 packed binary into _reading_time / _difficulty.
+    Missing file is fine — the rail just doesn't render those pills."""
+    import struct
+    if not os.path.exists(READING_SIDECAR_PATH):
+        print(f"WARNING: {READING_SIDECAR_PATH} not found — reading-time pills disabled", flush=True)
+        return
+    try:
+        with open(READING_SIDECAR_PATH, "rb") as f:
+            magic = f.read(4)
+            if magic != b"RDT1":
+                print(f"WARNING: {READING_SIDECAR_PATH} bad magic {magic!r} — skipping", flush=True)
+                return
+            (n,) = struct.unpack("<I", f.read(4))
+            blob = f.read()
+        # One-shot parse of the body. Each entry: u16 len, len bytes, u16 rt, u8 diff.
+        pos = 0
+        for _ in range(n):
+            (length,) = struct.unpack_from("<H", blob, pos); pos += 2
+            docno = blob[pos:pos + length].decode("utf-8", errors="replace"); pos += length
+            rt, diff_code = struct.unpack_from("<HB", blob, pos); pos += 3
+            _reading_time[docno] = rt
+            label = _DIFF_CODE_TO_LABEL.get(diff_code)
+            if label is not None:
+                _difficulty[docno] = label
+        print(f"  reading-sidecar: {len(_reading_time):,} entries "
+              f"({len(_difficulty):,} with difficulty)", flush=True)
+    except (OSError, struct.error) as e:
+        print(f"WARNING: couldn't load {READING_SIDECAR_PATH}: {e}", flush=True)
 
 
 def _load_related_classes() -> None:
@@ -433,6 +474,7 @@ async def lifespan(app: FastAPI):
     _summaries_store.load()
     _related_store.load()
     _load_related_classes()
+    _load_reading_sidecar()
     _docstore.load()
     await _load_autosuggest()
     await _pool.start(ZET_WORKERS)
@@ -502,6 +544,11 @@ def enrich_results(results: list, query: str) -> tuple[list, dict]:
             "url": url,
             "snippet": snippet,
             "image_url": _images_store.get(docno),
+            # PRD-027: reading-time + difficulty. Either may be absent
+            # (sidecar not built, or article too short for difficulty);
+            # frontend hides the pill when null.
+            "reading_time_min": _reading_time.get(docno),
+            "difficulty": _difficulty.get(docno),
         })
         td = time.perf_counter()
         t_other += (td - tc)

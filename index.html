@@ -824,6 +824,40 @@
       stroke-linejoin: round;
     }
 
+    /* PRD-027: reading-time + difficulty pills under the title row.
+       Same pill shape as .cite-trigger but inline (not button), and
+       coloured per-difficulty. */
+    .result-meta {
+      display: flex;
+      gap: 6px;
+      margin: 2px 0 6px;
+      flex-wrap: wrap;
+    }
+    .meta-pill {
+      display: inline-flex;
+      align-items: center;
+      height: 20px;
+      padding: 0 9px;
+      border-radius: 10px;
+      font-size: 0.7rem;
+      font-weight: 500;
+      background: #f1f3f4;
+      color: #5f6368;
+      user-select: none;
+    }
+    .meta-pill.difficulty-accessible {
+      background: #e6f4ea;
+      color: #137333;
+    }
+    .meta-pill.difficulty-moderate {
+      background: #fef7e0;
+      color: #b06000;
+    }
+    .meta-pill.difficulty-technical {
+      background: #fce8e6;
+      color: #c5221f;
+    }
+
     .cite-popover {
       position: absolute;
       z-index: 1000;
@@ -1278,6 +1312,7 @@
                  onerror="this.closest('.result-thumb-wrap').remove()">
              </div>`
           : '';
+        const metaPills = renderMetaPills(r);
         return `
           <div class="result-item">
             <div class="result-text">
@@ -1297,6 +1332,7 @@
                   data-title="${esc(title)}" data-url="${esc(url)}" data-docno="${esc(r.docno)}"
                   aria-label="Cite this result">${CITE_ICON_SVG}<span>Cite</span></button>
               </div>
+              ${metaPills}
               <div class="result-snippet">${highlightQuery(r.snippet || '', q)}</div>
             </div>
             ${thumb}
@@ -1880,6 +1916,22 @@
   const wikiLink = r => r.url || `https://en.wikipedia.org/wiki/${encodeURIComponent(r.docno)}`;
   const formatTitle = docno => (docno || '').replace(/_/g, ' ').replace(/\s*\(.*?\)\s*$/, '').trim();
   const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+  // PRD-027: reading time + difficulty pills. Either field may be
+  // null/absent; we emit only the pills we have. Returns empty string
+  // if both are missing so the row collapses.
+  function renderMetaPills(r) {
+    const pills = [];
+    if (typeof r.reading_time_min === 'number' && r.reading_time_min > 0) {
+      const n = Math.min(r.reading_time_min, 60);
+      const text = (r.reading_time_min > 60 ? '60+ min read' : `${n} min read`);
+      pills.push(`<span class="meta-pill reading-time" title="Approx. reading time at 250 wpm">${esc(text)}</span>`);
+    }
+    if (r.difficulty === 'accessible' || r.difficulty === 'moderate' || r.difficulty === 'technical') {
+      pills.push(`<span class="meta-pill difficulty difficulty-${r.difficulty}" title="Flesch-Kincaid difficulty">${r.difficulty}</span>`);
+    }
+    return pills.length ? `<div class="result-meta">${pills.join('')}</div>` : '';
+  }
 
   // Highlight query terms in a snippet string.
   // Escapes HTML first, then wraps whole-word matches in <b>.
