@@ -601,7 +601,7 @@ fi
 if [ -n "$READING_REASON" ]; then
     decided reading-sidecar "$READING_REASON"
     log "Building reading-time + difficulty sidecar (5-10 min)..."
-    as_zettair python3 "$SEARCH_DIR/tools/build_reading_sidecar.py" \
+    as_zettair python3 -u "$SEARCH_DIR/tools/build_reading_sidecar.py" \
         --docstore "$DOCSTORE" \
         --docmap   "$DOCMAP" \
         --output   "$READING_SIDECAR"
