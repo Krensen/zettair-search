@@ -1274,8 +1274,11 @@ def apply_specificity_gate(items: list[dict]) -> list[dict]:
             else:
                 n_without_para += 1
         kept.append(it)
-        if len(kept) >= RAIL_MAX:
-            break
+        # PRD-026: don't break early on RAIL_MAX. The gate's job is to
+        # enrich every candidate; the final trim happens after the
+        # quality filter + source-weighted sort. Breaking here would
+        # stop the gate from seeing wiki_itn or google_news items that
+        # appear after RAIL_MAX spike items in the union.
     return kept, {
         "checked": n_checked,
         "with_para_wiki": n_with_para_wiki,
