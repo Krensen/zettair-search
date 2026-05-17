@@ -1461,48 +1461,69 @@
       '<polyline points="11,4 16,4 16,9"/>' +
       '<line x1="16" y1="4" x2="9" y2="11"/>' +
       '<path d="M14 12 L14 15 Q14 16 13 16 L5 16 Q4 16 4 15 L4 7 Q4 6 5 6 L8 6"/></svg>';
-    const start = () => {
+    let lastFetchMs = 0;
+    const render = (data) => {
+      if (!data || !Array.isArray(data.items) || data.items.length === 0) return;
+      const isSpike = data.mode === 'spike';
+      // PRD-026: rail now sources from spike + Google News + Wikipedia
+      // ITN, so "News" reads more honestly than "Trending". "Popular"
+      // still applies for the first-week raw-mode fallback.
+      const labelText = isSpike ? 'News' : 'Popular';
+      const labelIcon = isSpike ? TREND_ICON : SPARK_ICON;
+      const inner = document.createElement('div');
+      inner.className = 'trending-rail-inner';
+      const lbl = document.createElement('div');
+      lbl.className = 'trending-rail-label';
+      lbl.innerHTML = labelIcon + '<span>' + labelText + '</span>';
+      inner.appendChild(lbl);
+      data.items.forEach(it => {
+        const a = document.createElement('a');
+        const inIndex = it.in_index !== false;   // default true if older payload
+        a.className = 'trending-chip' + (inIndex ? '' : ' external');
+        a.innerHTML = (inIndex ? TREND_ICON : EXTERNAL_ICON) + '<span></span>';
+        a.querySelector('span').textContent = it.title;
+        if (inIndex) {
+          a.href = '/?q=' + encodeURIComponent(it.query);
+          a.addEventListener('click', e => {
+            e.preventDefault();
+            doSearch(it.query);
+          });
+        } else {
+          a.href = it.wiki_url || ('https://en.wikipedia.org/wiki/' + encodeURIComponent(it.title.replace(/ /g, '_')));
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+        }
+        inner.appendChild(a);
+      });
+      rail.innerHTML = '';
+      rail.appendChild(inner);
+      rail.classList.add('ready');
+    };
+    const fetchOnce = () => {
+      lastFetchMs = Date.now();
       fetch('/api/trending?n=8')
         .then(r => r.ok ? r.json() : null)
-        .then(data => {
-          if (!data || !Array.isArray(data.items) || data.items.length === 0) return;
-          const isSpike = data.mode === 'spike';
-          // PRD-026: rail now sources from spike + Google News + Wikipedia
-          // ITN, so "News" reads more honestly than "Trending". "Popular"
-          // still applies for the first-week raw-mode fallback.
-          const labelText = isSpike ? 'News' : 'Popular';
-          const labelIcon = isSpike ? TREND_ICON : SPARK_ICON;
-          const inner = document.createElement('div');
-          inner.className = 'trending-rail-inner';
-          const lbl = document.createElement('div');
-          lbl.className = 'trending-rail-label';
-          lbl.innerHTML = labelIcon + '<span>' + labelText + '</span>';
-          inner.appendChild(lbl);
-          data.items.forEach(it => {
-            const a = document.createElement('a');
-            const inIndex = it.in_index !== false;   // default true if older payload
-            a.className = 'trending-chip' + (inIndex ? '' : ' external');
-            a.innerHTML = (inIndex ? TREND_ICON : EXTERNAL_ICON) + '<span></span>';
-            a.querySelector('span').textContent = it.title;
-            if (inIndex) {
-              a.href = '/?q=' + encodeURIComponent(it.query);
-              a.addEventListener('click', e => {
-                e.preventDefault();
-                doSearch(it.query);
-              });
-            } else {
-              a.href = it.wiki_url || ('https://en.wikipedia.org/wiki/' + encodeURIComponent(it.title.replace(/ /g, '_')));
-              a.target = '_blank';
-              a.rel = 'noopener noreferrer';
-            }
-            inner.appendChild(a);
-          });
-          rail.innerHTML = '';
-          rail.appendChild(inner);
-          rail.classList.add('ready');
-        })
-        .catch(() => { /* silent — rail stays hidden */ });
+        .then(render)
+        .catch(() => { /* silent — rail keeps whatever's already rendered */ });
     };
+    // Jittered so cohorts loaded together don't realign on the same tick.
+    const BASE_MS = 15 * 60 * 1000;
+    const JITTER_MS = 10 * 60 * 1000;
+    const MIN_STALE_MS = 10 * 60 * 1000;
+    const scheduleNext = () => {
+      const delay = BASE_MS + Math.random() * JITTER_MS;
+      setTimeout(() => {
+        if (document.visibilityState === 'visible') fetchOnce();
+        scheduleNext();
+      }, delay);
+    };
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' &&
+          Date.now() - lastFetchMs > MIN_STALE_MS) {
+        fetchOnce();
+      }
+    });
+    const start = () => { fetchOnce(); scheduleNext(); };
     if ('requestIdleCallback' in window) {
       requestIdleCallback(start, {timeout: 800});
     } else {
