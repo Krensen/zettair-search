@@ -38,6 +38,9 @@ Environment=ZET_TRENDING_CURRENT=/mnt/wikipedia-source/trending/current.json
 Environment=ZET_RELATED_STORE=/mnt/wikipedia-source/related.store
 Environment=ZET_RELATED_MAP=/mnt/wikipedia-source/related.map
 Environment=ZET_RELATED_CLASS=/mnt/wikipedia-source/related/entity_class.json
+# PRD-027: reading-time + difficulty sidecar. Written by setup.sh §14a
+# via tools/build_reading_sidecar.py.
+Environment=ZET_READING_SIDECAR=/mnt/wikipedia-source/enwiki_top1m.reading.bin
 
 # PRD-019: per-field BM25 (BM25F). Live. Sidecars index.field_lengths
 # and index.field_stats live next to the index and are auto-discovered
