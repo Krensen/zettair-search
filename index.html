@@ -1924,12 +1924,13 @@
     if (!hasTime && !hasDiff) return '';
     const parts = [];
     if (hasDiff) {
-      parts.push(`<span class="dot difficulty-${r.difficulty}" title="${esc(r.difficulty)}"></span>`);
+      const labelCap = r.difficulty.charAt(0).toUpperCase() + r.difficulty.slice(1);
+      parts.push(`<span class="dot difficulty-${r.difficulty}" title="${esc(labelCap)} computed reading difficulty"></span>`);
     }
     if (hasTime) {
       const n = Math.min(r.reading_time_min, 60);
       const text = r.reading_time_min > 60 ? '60+ min' : `${n} min`;
-      parts.push(`<span title="Approx. reading time at 250 wpm">${esc(text)}</span>`);
+      parts.push(`<span title="Approx. reading time at 250 words per minute">${esc(text)}</span>`);
     }
     return `<span class="result-corner">${parts.join('')}</span>`;
   }
