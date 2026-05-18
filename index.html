@@ -688,7 +688,54 @@
       align-items: center;
     }
 
-    .result-text { flex: 1; min-width: 0; }
+    .result-text { flex: 1; min-width: 0; position: relative; }
+
+    /* PRD-027 (V7): corner pill carrying difficulty-dot + reading time.
+       Anchored to the top-right of .result-text so the title can break
+       lines underneath it. Leaves room (padding-right) on the source/
+       title rows so the pill never overlaps. */
+    .result-corner {
+      position: absolute;
+      top: 0;
+      right: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 22px;
+      padding: 0 10px;
+      background: #f1f3f4;
+      border-radius: 11px;
+      font-size: 0.7rem;
+      color: #5f6368;
+      user-select: none;
+    }
+    .result-corner .dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #5f6368;
+    }
+    .result-corner .dot.difficulty-accessible { background: #137333; }
+    .result-corner .dot.difficulty-moderate   { background: #b06000; }
+    .result-corner .dot.difficulty-technical  { background: #c5221f; }
+    .result-source.has-corner,
+    .title-row.has-corner { padding-right: 110px; }
+
+    /* PRD-024 (V7 variant): quiet inline cite link that trails the
+       snippet. Replaces the standalone .cite-trigger pill on result
+       cards. Knowledge-panel cite-trigger is unaffected. */
+    .cite-link {
+      background: none;
+      border: none;
+      padding: 0;
+      margin-left: 0.4rem;
+      font: inherit;
+      font-size: 0.78rem;
+      color: #5f6368;
+      cursor: pointer;
+    }
+    .cite-link:hover { color: #1a73e8; text-decoration: underline; }
 
     /* Source line: favicon + site name + breadcrumb path */
     .result-source {
@@ -814,40 +861,6 @@
       outline-offset: 2px;
     }
 
-    /* PRD-027: reading-time + difficulty + Cite pill row. Sits under
-       the title, flex-laid with a small gap. Iconless Cite shares the
-       same pill shape as the meta pills. */
-    .result-meta {
-      display: flex;
-      gap: 6px;
-      margin: 2px 0 6px;
-      flex-wrap: wrap;
-      align-items: center;
-    }
-    .meta-pill {
-      display: inline-flex;
-      align-items: center;
-      height: 20px;
-      padding: 0 9px;
-      border-radius: 10px;
-      font-size: 0.7rem;
-      font-weight: 500;
-      background: #f1f3f4;
-      color: #5f6368;
-      user-select: none;
-    }
-    .meta-pill.difficulty-accessible {
-      background: #e6f4ea;
-      color: #137333;
-    }
-    .meta-pill.difficulty-moderate {
-      background: #fef7e0;
-      color: #b06000;
-    }
-    .meta-pill.difficulty-technical {
-      background: #fce8e6;
-      color: #c5221f;
-    }
 
     .cite-popover {
       position: absolute;
@@ -1303,11 +1316,13 @@
                  onerror="this.closest('.result-thumb-wrap').remove()">
              </div>`
           : '';
-        const metaPills = renderMetaPills(r);
+        const cornerPill = renderCornerPill(r);
+        const sourceClass = cornerPill ? 'result-source has-corner' : 'result-source';
         return `
           <div class="result-item">
             <div class="result-text">
-              <div class="result-source">
+              ${cornerPill}
+              <div class="${sourceClass}">
                 <img class="result-favicon"
                   src="https://www.google.com/s2/favicons?domain=en.wikipedia.org&sz=64" alt="">
                 <div class="result-site">
@@ -1320,13 +1335,9 @@
                    onclick="logClick(${JSON.stringify(q)}, ${JSON.stringify(r.docno)}, ${r.rank}, ${r.score})"
                 >${esc(title)}</a>
               </div>
-              <div class="result-meta">
-                ${metaPills}
-                <button class="cite-trigger" type="button"
+              <div class="result-snippet">${highlightQuery(r.snippet || '', q)}<button class="cite-link" type="button"
                   data-title="${esc(title)}" data-url="${esc(url)}" data-docno="${esc(r.docno)}"
-                  aria-label="Cite this result"><span>cite</span></button>
-              </div>
-              <div class="result-snippet">${highlightQuery(r.snippet || '', q)}</div>
+                  aria-label="Cite this result">cite</button></div>
             </div>
             ${thumb}
           </div>`;
@@ -1833,7 +1844,7 @@
   // right popover when any cite-trigger is clicked. Avoids per-result
   // event registration as the list re-renders.
   document.addEventListener('click', e => {
-    const trigger = e.target.closest('.cite-trigger');
+    const trigger = e.target.closest('.cite-trigger, .cite-link');
     if (!trigger) return;
     e.preventDefault();
     e.stopPropagation();
@@ -1903,20 +1914,24 @@
   const formatTitle = docno => (docno || '').replace(/_/g, ' ').replace(/\s*\(.*?\)\s*$/, '').trim();
   const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
-  // PRD-027: reading time + difficulty pills. Either field may be
-  // null/absent; we emit only the pills we have. Returns inline spans
-  // (no wrapper) so they sit directly in .title-row next to Cite.
-  function renderMetaPills(r) {
-    const pills = [];
-    if (typeof r.reading_time_min === 'number' && r.reading_time_min > 0) {
+  // PRD-027 (V7): single corner pill — coloured difficulty-dot +
+  // reading time. Renders nothing if both fields are absent. Renders
+  // just the dot if reading time is missing, just the time if
+  // difficulty is missing.
+  function renderCornerPill(r) {
+    const hasTime = typeof r.reading_time_min === 'number' && r.reading_time_min > 0;
+    const hasDiff = r.difficulty === 'accessible' || r.difficulty === 'moderate' || r.difficulty === 'technical';
+    if (!hasTime && !hasDiff) return '';
+    const parts = [];
+    if (hasDiff) {
+      parts.push(`<span class="dot difficulty-${r.difficulty}" title="${esc(r.difficulty)}"></span>`);
+    }
+    if (hasTime) {
       const n = Math.min(r.reading_time_min, 60);
-      const text = (r.reading_time_min > 60 ? '60+ min read' : `${n} min read`);
-      pills.push(`<span class="meta-pill reading-time" title="Approx. reading time at 250 wpm">${esc(text)}</span>`);
+      const text = r.reading_time_min > 60 ? '60+ min' : `${n} min`;
+      parts.push(`<span title="Approx. reading time at 250 wpm">${esc(text)}</span>`);
     }
-    if (r.difficulty === 'accessible' || r.difficulty === 'moderate' || r.difficulty === 'technical') {
-      pills.push(`<span class="meta-pill difficulty difficulty-${r.difficulty}" title="Flesch-Kincaid difficulty">${r.difficulty}</span>`);
-    }
-    return pills.join('');
+    return `<span class="result-corner">${parts.join('')}</span>`;
   }
 
   // Highlight query terms in a snippet string.
