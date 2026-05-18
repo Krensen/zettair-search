@@ -1,14 +1,15 @@
 [Unit]
-Description=PRD-020 trending timer — every 3 hours, 30 min after the hour
+Description=PRD-020 trending timer — every 1 hour
 
 [Timer]
-# Fire 3 min after boot to warm up, then every 3 hours.
-# The 3h cadence gives 8 samples/day, enough to detect within-day
-# spikes. The 30-min offset (handled via the dump's `latest_complete_hour`
-# logic, not the timer) is what lets us land after wikimedia has
-# published — the timer itself just fires every 3h on a fixed schedule.
+# Fire 3 min after boot, then every hour. Wikimedia publishes new
+# hourly pagecounts dumps with a ~2.5h lag; fetch_trending.py skips
+# hours it already has (already_have check), so running every hour
+# costs at most one extra HTTP request per cycle when no new dump
+# is available. Faster spike detection: a new spike at hour H can
+# land in current.json within ~3-3.5h instead of ~5-6h.
 OnBootSec=3min
-OnUnitActiveSec=3h
+OnUnitActiveSec=1h
 Unit=zettair-trending.service
 
 [Install]

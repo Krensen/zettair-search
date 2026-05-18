@@ -1,13 +1,13 @@
 [Unit]
-Description=PRD-021 news-spike summary producer timer — every 3h, offset from trending
+Description=PRD-021 news-spike summary producer timer — every 30 min
 
 [Timer]
-# 30 min after boot (give the trending fetch a chance to land first
-# after a reboot), then every 3h. Designed to fire ~30 min AFTER each
-# zettair-trending run so current.json has fresh event_paragraph data
-# to feed the producer.
-OnBootSec=30min
-OnUnitActiveSec=3h
+# 5 min after boot, then every 30 min. The producer is idempotent
+# (skips queries with fresh summaries / hash-matched paragraphs), so
+# running it more often is essentially free. The shorter cycle keeps
+# the spike-to-enqueue latency under ~30 min instead of ~3 h.
+OnBootSec=5min
+OnUnitActiveSec=30min
 Unit=zettair-news-summary-producer.service
 Persistent=true
 
