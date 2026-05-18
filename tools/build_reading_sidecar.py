@@ -7,7 +7,7 @@ moderate / technical, and writes a single packed binary sidecar.
 
 Output format (little-endian throughout):
 
-    4-byte magic  "RDT1"
+    4-byte magic  "RDT2"
     uint32        N (entry count)
     N entries of:
         uint16    docno length in bytes
@@ -17,7 +17,12 @@ Output format (little-endian throughout):
                     0 = null (suppressed: too short)
                     1 = accessible (FK <= 8)
                     2 = moderate   (8 < FK <= 13)
-                    3 = technical  (FK > 13)
+                    3 = technical  (13 < FK <= 20)
+                    4 = dense      (FK > 20)
+
+    RDT2 added the "dense" bucket. RDT1 sidecars become invalid;
+    the server logs a magic-mismatch warning and disables pills until
+    setup.sh rebuilds.
 
 Difficulty is null when words < MIN_WORDS or sentences < MIN_SENTENCES;
 reading time is always emitted.
@@ -47,8 +52,9 @@ MIN_WORDS       = 150
 MIN_SENTENCES   = 5
 FK_ACCESSIBLE   = 8.0    # FK <= 8
 FK_MODERATE     = 13.0   # 8 < FK <= 13
+FK_TECHNICAL    = 20.0   # 13 < FK <= 20; > 20 is "dense"
 
-MAGIC = b"RDT1"
+MAGIC = b"RDT2"
 
 WORD_RE     = re.compile(r"\b[\w']+\b", re.UNICODE)
 SENTENCE_RE = re.compile(r"[.!?]+(?:\s|$)")
@@ -125,12 +131,14 @@ def compute_metrics(text: str) -> tuple[int, str | None]:
         diff = "accessible"
     elif fk <= FK_MODERATE:
         diff = "moderate"
-    else:
+    elif fk <= FK_TECHNICAL:
         diff = "technical"
+    else:
+        diff = "dense"
     return reading_time, diff
 
 
-DIFF_CODE = {None: 0, "accessible": 1, "moderate": 2, "technical": 3}
+DIFF_CODE = {None: 0, "accessible": 1, "moderate": 2, "technical": 3, "dense": 4}
 
 
 def build(docstore_path: Path, docmap_path: Path, output_path: Path,
@@ -150,7 +158,7 @@ def build(docstore_path: Path, docmap_path: Path, output_path: Path,
     n_processed = 0
     n_with_diff = 0
     n_null_diff = 0
-    n_diff_counts = {"accessible": 0, "moderate": 0, "technical": 0}
+    n_diff_counts = {"accessible": 0, "moderate": 0, "technical": 0, "dense": 0}
 
     with open(tmp_path, "wb") as out:
         out.write(MAGIC)
@@ -187,6 +195,7 @@ def build(docstore_path: Path, docmap_path: Path, output_path: Path,
     print(f"  difficulty: accessible={n_diff_counts['accessible']:,} "
           f"moderate={n_diff_counts['moderate']:,} "
           f"technical={n_diff_counts['technical']:,} "
+          f"dense={n_diff_counts['dense']:,} "
           f"null(short)={n_null_diff:,}", flush=True)
 
 

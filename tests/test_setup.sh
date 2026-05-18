@@ -177,7 +177,9 @@ populate_fully_built() {
     touch -t 202401040000 "$SANDBOX/volume/enwiki_top1m_urls.store"
     touch -t 202401040000 "$SANDBOX/volume/enwiki_top1m_urls.map"
 
-    # PRD-027: reading sidecar (derived from docstore; same mtime fine)
+    # PRD-027: reading sidecar (derived from docstore; same mtime fine).
+    # Must carry the correct magic, otherwise setup.sh rebuilds it.
+    printf 'RDT2' > "$SANDBOX/volume/enwiki_top1m.reading.bin"
     touch -t 202401040000 "$SANDBOX/volume/enwiki_top1m.reading.bin"
 
     # zet binary (ELF-ish — we fake the file file-magic check by

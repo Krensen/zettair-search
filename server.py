@@ -185,7 +185,7 @@ _related_class:  dict = {}   # PRD-025 docno -> class label, loaded at startup
 # Two parallel dicts so each lookup is one hash. Missing docno => no pills.
 _reading_time: dict[str, int] = {}
 _difficulty:   dict[str, str] = {}
-_DIFF_CODE_TO_LABEL = {1: "accessible", 2: "moderate", 3: "technical"}
+_DIFF_CODE_TO_LABEL = {1: "accessible", 2: "moderate", 3: "technical", 4: "dense"}
 
 
 def _load_reading_sidecar() -> None:
@@ -198,8 +198,9 @@ def _load_reading_sidecar() -> None:
     try:
         with open(READING_SIDECAR_PATH, "rb") as f:
             magic = f.read(4)
-            if magic != b"RDT1":
-                print(f"WARNING: {READING_SIDECAR_PATH} bad magic {magic!r} — skipping", flush=True)
+            if magic != b"RDT2":
+                print(f"WARNING: {READING_SIDECAR_PATH} bad magic {magic!r} — skipping "
+                      f"(expected RDT2; old RDT1 sidecars need rebuilding)", flush=True)
                 return
             (n,) = struct.unpack("<I", f.read(4))
             blob = f.read()

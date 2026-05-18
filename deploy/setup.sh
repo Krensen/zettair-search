@@ -588,15 +588,25 @@ fi
 
 ### ── 14a. PRD-027 reading-time + difficulty sidecar ────────────────────────
 #
-# Stale if the docstore is newer. Single-pass walk over the docstore,
-# ~5-10 min on the full corpus. Output is ~9 MB; server mmaps it
-# into RAM at startup.
+# Stale if the docstore is newer, OR the on-disk magic does not match
+# the current expected version. The magic check picks up format bumps
+# (e.g. RDT1 -> RDT2) so a sidecar built by an older script gets
+# rebuilt automatically without manual rm.
+#
+# Single-pass walk over the docstore, ~5-10 min on the full corpus.
+# Output is ~9 MB; server reads it into RAM at startup.
 
+READING_MAGIC_EXPECTED="RDT2"
 READING_REASON=""
 if [ ! -f "$READING_SIDECAR" ]; then
     READING_REASON="reading sidecar missing"
 elif [ -e "$DOCSTORE" ] && [ "$DOCSTORE" -nt "$READING_SIDECAR" ]; then
     READING_REASON="docstore newer than reading sidecar"
+else
+    READING_MAGIC_FOUND=$(head -c 4 "$READING_SIDECAR" 2>/dev/null || true)
+    if [ "$READING_MAGIC_FOUND" != "$READING_MAGIC_EXPECTED" ]; then
+        READING_REASON="sidecar magic '$READING_MAGIC_FOUND' != expected '$READING_MAGIC_EXPECTED'"
+    fi
 fi
 if [ -n "$READING_REASON" ]; then
     decided reading-sidecar "$READING_REASON"

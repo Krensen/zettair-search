@@ -730,6 +730,9 @@
     .result-corner .dot.difficulty-technical {
       background: conic-gradient(#5f6368 0% 75%, #fff 75% 100%);
     }
+    .result-corner .dot.difficulty-dense {
+      background: #5f6368;
+    }
     /* Stub / unknown: just the ring. Same size + border so the pill
        does not jiggle when difficulty is missing. */
     .result-corner .dot.difficulty-unknown {
@@ -1936,7 +1939,7 @@
   // difficulty is missing.
   function renderCornerPill(r) {
     const hasTime = typeof r.reading_time_min === 'number' && r.reading_time_min > 0;
-    const hasDiff = r.difficulty === 'accessible' || r.difficulty === 'moderate' || r.difficulty === 'technical';
+    const hasDiff = r.difficulty === 'accessible' || r.difficulty === 'moderate' || r.difficulty === 'technical' || r.difficulty === 'dense';
     if (!hasTime && !hasDiff) return '';
     const parts = [];
     // Always emit a difficulty dot when the pill renders. Unknown
