@@ -730,6 +730,11 @@
     .result-corner .dot.difficulty-technical {
       background: conic-gradient(#5f6368 0% 75%, #fff 75% 100%);
     }
+    /* Stub / unknown: just the ring. Same size + border so the pill
+       does not jiggle when difficulty is missing. */
+    .result-corner .dot.difficulty-unknown {
+      background: #fff;
+    }
     .result-source.has-corner,
     .title-row.has-corner { padding-right: 110px; }
 
@@ -1934,9 +1939,14 @@
     const hasDiff = r.difficulty === 'accessible' || r.difficulty === 'moderate' || r.difficulty === 'technical';
     if (!hasTime && !hasDiff) return '';
     const parts = [];
+    // Always emit a difficulty dot when the pill renders. Unknown
+    // difficulty (stubs, list pages) gets an empty ring so the pill
+    // width stays consistent across results.
     if (hasDiff) {
       const labelCap = r.difficulty.charAt(0).toUpperCase() + r.difficulty.slice(1);
       parts.push(`<span class="dot difficulty-${r.difficulty}" title="${esc(labelCap)} computed reading difficulty"></span>`);
+    } else {
+      parts.push(`<span class="dot difficulty-unknown" title="Too short to estimate difficulty"></span>`);
     }
     if (hasTime) {
       const n = Math.min(r.reading_time_min, 60);
