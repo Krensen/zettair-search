@@ -824,15 +824,9 @@
       stroke-linejoin: round;
     }
 
-    /* PRD-027: reading-time + difficulty pills under the title row.
-       Same pill shape as .cite-trigger but inline (not button), and
-       coloured per-difficulty. */
-    .result-meta {
-      display: flex;
-      gap: 6px;
-      margin: 2px 0 6px;
-      flex-wrap: wrap;
-    }
+    /* PRD-027: reading-time + difficulty pills. Live inside .title-row
+       alongside the Cite button, sharing the row's flex gap. Same pill
+       shape as .cite-trigger but inline (not button), coloured per-difficulty. */
     .meta-pill {
       display: inline-flex;
       align-items: center;
@@ -1328,11 +1322,11 @@
                 <a class="result-title" href="${esc(url)}" target="_blank" rel="noopener noreferrer"
                    onclick="logClick(${JSON.stringify(q)}, ${JSON.stringify(r.docno)}, ${r.rank}, ${r.score})"
                 >${esc(title)}</a>
+                ${metaPills}
                 <button class="cite-trigger" type="button"
                   data-title="${esc(title)}" data-url="${esc(url)}" data-docno="${esc(r.docno)}"
                   aria-label="Cite this result">${CITE_ICON_SVG}<span>Cite</span></button>
               </div>
-              ${metaPills}
               <div class="result-snippet">${highlightQuery(r.snippet || '', q)}</div>
             </div>
             ${thumb}
@@ -1918,8 +1912,8 @@
   const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
   // PRD-027: reading time + difficulty pills. Either field may be
-  // null/absent; we emit only the pills we have. Returns empty string
-  // if both are missing so the row collapses.
+  // null/absent; we emit only the pills we have. Returns inline spans
+  // (no wrapper) so they sit directly in .title-row next to Cite.
   function renderMetaPills(r) {
     const pills = [];
     if (typeof r.reading_time_min === 'number' && r.reading_time_min > 0) {
@@ -1930,7 +1924,7 @@
     if (r.difficulty === 'accessible' || r.difficulty === 'moderate' || r.difficulty === 'technical') {
       pills.push(`<span class="meta-pill difficulty difficulty-${r.difficulty}" title="Flesch-Kincaid difficulty">${r.difficulty}</span>`);
     }
-    return pills.length ? `<div class="result-meta">${pills.join('')}</div>` : '';
+    return pills.join('');
   }
 
   // Highlight query terms in a snippet string.
