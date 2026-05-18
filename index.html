@@ -1236,7 +1236,7 @@
               >${esc(title)}</a>
               <button class="cite-trigger" type="button"
                  data-title="${esc(title)}" data-url="${esc(wikiUrl)}" data-docno="${esc(top.docno)}"
-                 aria-label="Cite this article"><span>Cite</span></button>
+                 aria-label="Cite this article"><span>cite</span></button>
             </div>
             <div class="kp-source">
               <img src="https://www.google.com/s2/favicons?domain=en.wikipedia.org&sz=32" alt="">
@@ -1324,7 +1324,7 @@
                 ${metaPills}
                 <button class="cite-trigger" type="button"
                   data-title="${esc(title)}" data-url="${esc(url)}" data-docno="${esc(r.docno)}"
-                  aria-label="Cite this result"><span>Cite</span></button>
+                  aria-label="Cite this result"><span>cite</span></button>
               </div>
               <div class="result-snippet">${highlightQuery(r.snippet || '', q)}</div>
             </div>
@@ -1826,7 +1826,7 @@
   // result card or knowledge panel. Returns an HTML string.
   function citeTriggerHtml() {
     return '<button class="cite-trigger" type="button" aria-label="Cite this result">'
-      + '<span>Cite</span></button>';
+      + '<span>cite</span></button>';
   }
 
   // Event delegation: a single document-level click handler opens the
