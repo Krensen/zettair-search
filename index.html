@@ -709,16 +709,27 @@
       color: #5f6368;
       user-select: none;
     }
+    /* Harvey-ball difficulty indicator. ¼ / ½ / ¾ fills via
+       conic-gradient; consistent grey palette so the symbol reads
+       as "how full" without colour cueing alarm. */
     .result-corner .dot {
       display: inline-block;
-      width: 8px;
-      height: 8px;
+      width: 12px;
+      height: 12px;
       border-radius: 50%;
-      background: #5f6368;
+      border: 1.2px solid #5f6368;
+      background: #fff;
+      box-sizing: border-box;
     }
-    .result-corner .dot.difficulty-accessible { background: #137333; }
-    .result-corner .dot.difficulty-moderate   { background: #b06000; }
-    .result-corner .dot.difficulty-technical  { background: #c5221f; }
+    .result-corner .dot.difficulty-accessible {
+      background: conic-gradient(#5f6368 0% 25%, #fff 25% 100%);
+    }
+    .result-corner .dot.difficulty-moderate {
+      background: conic-gradient(#5f6368 0% 50%, #fff 50% 100%);
+    }
+    .result-corner .dot.difficulty-technical {
+      background: conic-gradient(#5f6368 0% 75%, #fff 75% 100%);
+    }
     .result-source.has-corner,
     .title-row.has-corner { padding-right: 110px; }
 
