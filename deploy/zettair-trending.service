@@ -12,9 +12,14 @@ ExecStartPost=/usr/bin/python3 /opt/zettair-search/tools/build_news_summary_jobs
 StandardOutput=journal
 StandardError=journal
 
-# A single fetch is small (~50 MB dump, ~5s of work). Cap memory so a
-# pathological day doesn't OOM the box.
-MemoryMax=512M
+# Memory cap so a pathological day cannot OOM the box. Empirical
+# floor: the gzipped pageviews dump streams in at ~60 MB and the
+# in-memory counts dict reaches ~1.7M Python str keys (~250-400 MB).
+# Plus PRD-022/026: the specificity gate fetches Wikipedia wikitext
+# for up to MAX_CANDIDATES_TO_GATE candidates and Google News + ITN
+# headlines for each, then caches them. The previous 512M was tight
+# and the unit was being OOM-killed mid-run; 1G gives ~2x headroom.
+MemoryMax=1G
 
 # PRD-021: ExecStartPost chains the news-summary producer right after
 # the trending fetch writes current.json. Both run as zettair so no

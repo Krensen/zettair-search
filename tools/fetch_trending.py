@@ -362,17 +362,19 @@ def fetch_dump(hour: dt.datetime) -> dict[str, int]:
     log(f"fetching {url}")
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            buf = resp.read()
+        # Stream-decompress the gzipped dump instead of buffering ~60 MB
+        # of compressed bytes in RAM. The host has been OOM-killing this
+        # process when memory is tight; eliminating the full-body buffer
+        # cuts peak heap by a chunk.
+        resp = urllib.request.urlopen(req, timeout=120)
     except urllib.error.HTTPError as e:
         if e.code == 404:
             log(f"  dump 404 — not yet published")
             return {}
         raise
-    log(f"  got {len(buf):,} bytes")
 
     counts: dict[str, int] = {}
-    with gzip.open(io.BytesIO(buf), "rt", encoding="utf-8", errors="replace") as gz:
+    with resp, gzip.open(resp, "rt", encoding="utf-8", errors="replace") as gz:
         for line in gz:
             # Format: <project> <title> <views> <bytes>
             # Split on the first 3 whitespace runs only; titles may
