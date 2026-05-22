@@ -403,6 +403,7 @@
       width: 112px;
       height: 140px;
       object-fit: cover;
+      object-position: center top;
       border-radius: 8px;
       flex-shrink: 0;
       box-shadow: 0 1px 4px rgba(0,0,0,0.15);
@@ -829,6 +830,12 @@
       width: 92px;
       height: 92px;
       object-fit: cover;
+      /* Crop from the top instead of the centre. Wikipedia infobox
+         portraits put the subject head near the top of the frame; a
+         centred crop chops the head off and leaves us looking at a
+         torso. "center top" keeps the head in-frame for the 90%-case
+         portrait and only slightly worsens landscape group photos. */
+      object-position: center top;
       border-radius: 8px;
       display: block;
       border: 1px solid #e8eaed;
