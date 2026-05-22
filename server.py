@@ -852,11 +852,27 @@ async def trending(n: int = Query(8, ge=1, le=50)):
     }
 
 
+_THUMB_SIZE_RE = re.compile(r"/(\d+)px-")
+
+
+def _rewrite_thumb_size(url: str, target: int = 250) -> str:
+    """Wikimedia's CDN now whitelists a small set of thumbnail widths;
+    requests for non-whitelisted sizes (including the 300 our image
+    store was built with) return HTTP 400. Empirical probe: 250 / 330 /
+    500 are honoured, others rejected. Rewrite the last /{N}px-/ token
+    to target. Leaves non-thumbnail URLs untouched."""
+    m = _THUMB_SIZE_RE.search(url)
+    if not m:
+        return url
+    return url[:m.start()] + f"/{target}px-" + url[m.end():]
+
+
 @app.get("/img")
 async def image_proxy(url: str = Query(...)):
     """Proxy Wikimedia images to avoid browser-side rate limiting."""
     if not url.startswith("https://upload.wikimedia.org/"):
         return Response(status_code=403)
+    url = _rewrite_thumb_size(url)
     # urllib.request can't handle non-ASCII characters in URLs (it does
     # not percent-encode them automatically). Wikimedia commons URLs
     # frequently contain non-ASCII path segments — "Andrés_Iniesta",
