@@ -465,6 +465,140 @@
   }
   .event-detail .ed-meta a:hover { text-decoration: underline; }
 
+  /* ── Month view (calendar grid) ─────────────────────────────────── */
+  .month-view {
+    max-width: 980px;
+    margin: 24px auto 0;
+    padding: 0 20px;
+  }
+  .month-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 18px;
+    font-size: 0.84rem;
+  }
+  .month-nav a {
+    color: var(--muted);
+    text-decoration: none;
+    padding: 6px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+  }
+  .month-nav a:hover { color: var(--accent); border-color: var(--accent); }
+  .month-nav a.disabled { opacity: 0.4; pointer-events: none; }
+
+  .month-title {
+    margin: 0 0 18px;
+    font-size: 1.7rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+  .month-title .small {
+    font-size: 0.92rem;
+    font-weight: 500;
+    color: var(--muted);
+    margin-left: 12px;
+  }
+
+  .month-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 6px;
+  }
+  .dow-row {
+    display: contents;
+  }
+  .dow-row .dow {
+    font-size: 0.66rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    text-align: center;
+    padding: 4px 0;
+  }
+  .day-cell {
+    aspect-ratio: 1 / 1;
+    border-radius: 8px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    text-decoration: none;
+    color: inherit;
+    transition: transform 140ms ease, box-shadow 140ms ease;
+  }
+  .day-cell:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 10px rgba(0,0,0,0.06);
+  }
+  .day-cell.empty {
+    background: transparent;
+    border: 1px dashed transparent;
+    pointer-events: none;
+  }
+  .day-cell.empty.placeholder {
+    /* Days before the 1st / after the end-of-month — invisible spacer. */
+    visibility: hidden;
+  }
+  .day-cell.no-events {
+    color: var(--muted);
+    pointer-events: none;       /* nothing to drill into */
+  }
+  /* Cells with events get the dominant-entity colour tint and a stronger border. */
+  .day-cell.has-events {
+    background: var(--ent-color-soft, #f4f5f7);
+    border-color: var(--ent-color, var(--line));
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.6);
+  }
+  .day-cell .num {
+    font-size: 0.86rem;
+    font-weight: 600;
+    color: var(--text);
+    padding: 6px 8px 0;
+  }
+  .day-cell.today .num::after {
+    content: '';
+    display: inline-block;
+    width: 6px; height: 6px; margin-left: 4px;
+    border-radius: 50%;
+    background: var(--accent);
+    vertical-align: middle;
+  }
+  .day-cell .top-title {
+    font-size: 0.7rem;
+    font-weight: 600;
+    line-height: 1.25;
+    color: var(--text);
+    padding: 2px 8px 0;
+    /* Clamp to 2 lines so cells stay roughly even-height. */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .day-cell .count {
+    font-size: 0.62rem;
+    color: var(--muted);
+    padding: 0 8px 4px;
+    margin-top: auto;
+  }
+  /* Bottom mix-strip: up to 3 entity colours. */
+  .day-cell .mix {
+    display: flex;
+    height: 4px;
+    margin-top: 2px;
+  }
+  .day-cell .mix span {
+    flex: 1;
+    background: var(--mix-color, var(--ent-default));
+  }
+
   /* Responsive */
   @media (max-width: 640px) {
     .timeline {
@@ -482,6 +616,11 @@
     .brick, .brick.size-m { grid-column: span 1; grid-row: span 1; }
     .brick.size-l { grid-column: span 2; grid-row: span 1; }
     .brick.size-xl { grid-column: span 2; grid-row: span 2; }
+    /* Month grid: keep 7 columns but compact cells; hide the title preview, just dot + count. */
+    .month-grid { gap: 4px; }
+    .day-cell .top-title { display: none; }
+    .day-cell .num { font-size: 0.74rem; padding: 4px 6px 0; }
+    .day-cell .count { font-size: 0.58rem; padding: 0 6px 3px; }
   }
 </style>
 </head>
@@ -751,9 +890,124 @@
     }
   }
 
+  // ── Month view (/news/YYYY-MM) ──────────────────────────────────
+  function renderMonth(ym, payload) {
+    const [yearStr, monthStr] = ym.split('-');
+    const year  = parseInt(yearStr, 10);
+    const month = parseInt(monthStr, 10);
+    const monthName = new Date(Date.UTC(year, month - 1, 1))
+      .toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' });
+
+    if (pageHeader) pageHeader.textContent = monthName;
+    if (lede) lede.innerHTML =
+      `<a href="/news" style="color: var(--accent); text-decoration: none;">← Back to timeline</a> · ` +
+      `<a href="/" style="color: var(--accent); text-decoration: none;">Search</a>`;
+    document.title = `${monthName} · zettair news`;
+
+    // Prev / next month strings.
+    function shiftMonth(y, m, delta) {
+      const t = new Date(Date.UTC(y, m - 1 + delta, 1));
+      return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}`;
+    }
+    const prevYm = shiftMonth(year, month, -1);
+    const nextYm = shiftMonth(year, month,  1);
+    const todayYm = new Date().toISOString().slice(0, 7);
+    const nextDisabled = nextYm > todayYm ? 'disabled' : '';
+
+    const days = payload.days || [];
+    const colors = payload.entity_colors || {};
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    // Build a sparse 6x7 grid: weekday header + N leading placeholders + day cells.
+    // ISO weekday: Mon=1..Sun=7. We render Mon-first.
+    const firstWeekdayIso = payload.first_weekday_iso || 1;
+    const leading = firstWeekdayIso - 1;   // 0..6
+
+    // Hex helper: convert one of our 16 palette slots to a "soft" CSS variable
+    // by reusing CSS var(--ent-N) as the strong border and a 12%-alpha fill via
+    // an additional CSS variable on the cell. Since CSS does not expose alpha
+    // mixing for a `var(--x)` reference cleanly without colour-mix, we use a
+    // parallel set of soft hex values matched 1:1 against the strong palette.
+    const SOFT_HEX = [
+      null,
+      '#fbdedc', '#fee9c2', '#dcebe0', '#dde7f6',
+      '#e1d4ec', '#ecd5c2', '#cce5e7', '#d6dcef',
+      '#eed5e0', '#dcd3b8', '#c5ddd8', '#e3c7e9',
+      '#cddff2', '#ead2dc', '#cee0cf', '#d6cdc8',
+    ];
+    function softHex(slot) { return SOFT_HEX[slot] || '#f4f5f7'; }
+    function strongVar(slot) { return slot && slot >= 1 && slot <= 16
+      ? `var(--ent-${slot})` : 'var(--ent-default)'; }
+
+    const dowLabels = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+    const dowRow = `<div class="dow-row">${
+      dowLabels.map(d => `<div class="dow">${d}</div>`).join('')
+    }</div>`;
+
+    const placeholders = [];
+    for (let i = 0; i < leading; i++) {
+      placeholders.push(`<div class="day-cell empty placeholder"></div>`);
+    }
+    const dayCells = days.map(cell => {
+      const dayNum = parseInt(cell.date.slice(-2), 10);
+      const isToday = cell.date === todayIso;
+      if (!cell.count) {
+        return `<div class="day-cell no-events ${isToday ? 'today' : ''}">
+          <div class="num">${dayNum}</div>
+        </div>`;
+      }
+      const topSlot = colors[cell.top_docno];
+      const styleVars = [
+        `--ent-color: ${strongVar(topSlot)}`,
+        `--ent-color-soft: ${softHex(topSlot)}`,
+      ].join('; ');
+      const mixHtml = (cell.color_mix || []).map(dn =>
+        `<span style="--mix-color: ${strongVar(colors[dn])}"></span>`
+      ).join('');
+      const topPara = (cell.top_paragraph || cell.top_title || '').slice(0, 180);
+      const titleAttr = esc(topPara.replace(/"/g, "'"));
+      return `<a class="day-cell has-events ${isToday ? 'today' : ''}"
+                  href="/news/${esc(cell.date)}"
+                  style="${styleVars}"
+                  title="${titleAttr}">
+        <div class="num">${dayNum}</div>
+        <div class="top-title">${esc(cell.top_title || '')}</div>
+        <div class="count">${cell.count} event${cell.count === 1 ? '' : 's'}</div>
+        <div class="mix">${mixHtml}</div>
+      </a>`;
+    }).join('');
+
+    const totalEvents = days.reduce((s, d) => s + d.count, 0);
+
+    content.innerHTML = `
+      <div class="month-view">
+        <div class="month-nav">
+          <a href="/news/${esc(prevYm)}">← ${esc(prevYm)}</a>
+          <a href="/news">All recent</a>
+          <a href="/news/${esc(nextYm)}" class="${nextDisabled}">${esc(nextYm)} →</a>
+        </div>
+        <h2 class="month-title">
+          ${esc(monthName)}
+          <span class="small">${totalEvents} events across ${days.filter(d => d.count).length} days</span>
+        </h2>
+        <div class="month-grid">
+          ${dowRow}
+          ${placeholders.join('')}
+          ${dayCells}
+        </div>
+      </div>`;
+
+    if (metaLine) {
+      metaLine.textContent = (payload.built_at
+        ? `Index built ${payload.built_at.slice(0, 10)}.`
+        : '');
+    }
+  }
+
   // ── Route dispatch ──────────────────────────────────────────────
   const path = location.pathname;
-  const dayMatch = path.match(/^\/news\/(\d{4}-\d{2}-\d{2})\/?$/);
+  const dayMatch   = path.match(/^\/news\/(\d{4}-\d{2}-\d{2})\/?$/);
+  const monthMatch = path.match(/^\/news\/(\d{4}-\d{2})\/?$/);
   if (dayMatch) {
     const date = dayMatch[1];
     fetch(`/api/events/day/${encodeURIComponent(date)}`)
@@ -761,6 +1015,14 @@
       .then(payload => renderDay(date, payload))
       .catch(err => {
         content.innerHTML = `<div class="empty"><p>Could not load ${esc(date)} (${esc(String(err))}).</p></div>`;
+      });
+  } else if (monthMatch) {
+    const ym = monthMatch[1];
+    fetch(`/api/events/month/${encodeURIComponent(ym)}`)
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(payload => renderMonth(ym, payload))
+      .catch(err => {
+        content.innerHTML = `<div class="empty"><p>Could not load ${esc(ym)} (${esc(String(err))}).</p></div>`;
       });
   } else {
     fetch('/api/events?per_day=20')
