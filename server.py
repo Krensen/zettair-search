@@ -1238,6 +1238,122 @@ async def news_page():
     return html
 
 
+def _parse_year_month(s: str) -> tuple[int, int] | None:
+    """Parse YYYY-MM strictly. Returns (year, month) or None."""
+    if not isinstance(s, str) or len(s) != 7 or s[4] != '-':
+        return None
+    try:
+        y = int(s[:4])
+        m = int(s[5:7])
+    except ValueError:
+        return None
+    if y < 1900 or y > 2999 or m < 1 or m > 12:
+        return None
+    return y, m
+
+
+def _days_in_month(year: int, month: int) -> int:
+    if month == 12:
+        nxt = datetime.date(year + 1, 1, 1)
+    else:
+        nxt = datetime.date(year, month + 1, 1)
+    return (nxt - datetime.date(year, month, 1)).days
+
+
+def _month_summary(year: int, month: int) -> dict:
+    """Build a calendar-friendly summary for a month from events.jsonl.
+
+    Returns:
+      {
+        "year": Y, "month": M, "days_in_month": N,
+        "first_weekday_iso": 1..7,   # ISO weekday of day 1 (Mon=1)
+        "days": [
+          { "date": "YYYY-MM-DD",
+            "count": int,
+            "top_docno": str | None,    # highest rank_hint that day
+            "top_title": str | None,
+            "top_paragraph": str | None,
+            "top_image_url": str | None,
+            "color_mix": [docno, ...]   # up to 3, ordered by per-day rank desc
+          }, ...
+        ],
+        "entity_colors": { docno: slot, ... },  # only docnos in this month
+        "built_at": "..."
+      }
+    """
+    dim = _days_in_month(year, month)
+    first = datetime.date(year, month, 1)
+    days: list[dict] = []
+    mentioned_docnos: set[str] = set()
+    for d in range(1, dim + 1):
+        date_iso = datetime.date(year, month, d).isoformat()
+        events = _read_events_for_date(date_iso)
+        cell: dict = {"date": date_iso, "count": len(events)}
+        if events:
+            # events are pre-sorted by rank_hint desc inside the idx slice
+            top = events[0]
+            cell["top_docno"] = top.get("docno")
+            cell["top_title"] = top.get("title") or (top.get("docno") or "").replace("_", " ")
+            cell["top_paragraph"] = top.get("event_paragraph")
+            cell["top_image_url"] = top.get("image_url")
+            # Top-3 distinct docnos for the colour-mix stripes.
+            mix: list[str] = []
+            seen: set[str] = set()
+            for e in events:
+                dn = e.get("docno")
+                if dn and dn not in seen:
+                    mix.append(dn); seen.add(dn)
+                if len(mix) >= 3:
+                    break
+            cell["color_mix"] = mix
+            mentioned_docnos.update(mix)
+        days.append(cell)
+
+    return {
+        "year": year,
+        "month": month,
+        "days_in_month": dim,
+        # isoweekday: Mon=1..Sun=7. Useful for the calendar grid offset.
+        "first_weekday_iso": first.isoweekday(),
+        "days": days,
+        "entity_colors": {
+            dn: _entity_colors[dn]
+            for dn in mentioned_docnos
+            if dn in _entity_colors
+        },
+        "built_at": _events_idx.get("built_at"),
+    }
+
+
+@app.get("/news/{ev_month}", response_class=HTMLResponse)
+async def news_month_page(ev_month: str):
+    """Month view: calendar grid. Matches YYYY-MM strictly; the
+    YYYY-MM-DD day route is registered below and takes the more
+    specific pattern. Anything that does not parse falls through
+    to the day route, which 404s if it is not a real date either."""
+    ym = _parse_year_month(ev_month)
+    if ym is None:
+        # Not a month-shaped path — let the day route handle it.
+        return await news_day_page(ev_month)
+    html = _load_news_html()
+    if not html:
+        return HTMLResponse("<h1>News timeline coming soon</h1>"
+                            "<p>The events index has not been built yet.</p>",
+                            status_code=503)
+    return html
+
+
+@app.get("/api/events/month/{ev_month}")
+async def api_events_month(ev_month: str):
+    """Month summary JSON: per-day cells with top event + colour mix.
+    Used by /news/YYYY-MM and (later) the iOS app."""
+    ym = _parse_year_month(ev_month)
+    if ym is None:
+        return JSONResponse({"error": "ev_month must be YYYY-MM"}, status_code=400)
+    y, m = ym
+    return _month_summary(y, m)
+
+
 @app.get("/news/{ev_date}", response_class=HTMLResponse)
 async def news_day_page(ev_date: str):
     """Day-detail view: one date, masonry-brick layout.
