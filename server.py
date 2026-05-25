@@ -1296,17 +1296,28 @@ def _month_summary(year: int, month: int) -> dict:
             cell["top_title"] = top.get("title") or (top.get("docno") or "").replace("_", " ")
             cell["top_paragraph"] = top.get("event_paragraph")
             cell["top_image_url"] = top.get("image_url")
-            # Top-3 distinct docnos for the colour-mix stripes.
+            # Per-day distinct-entity list — one entry per unique docno,
+            # ordered by rank desc. Capped to keep payloads bounded; the
+            # frontend list-renders as many as fit and shows "+N more"
+            # below the cap.
+            DOCNO_LIST_CAP = 12
             mix: list[str] = []
+            entries: list[dict] = []
             seen: set[str] = set()
             for e in events:
                 dn = e.get("docno")
-                if dn and dn not in seen:
-                    mix.append(dn); seen.add(dn)
-                if len(mix) >= 3:
+                if not dn or dn in seen:
+                    continue
+                seen.add(dn)
+                title = e.get("title") or dn.replace("_", " ")
+                entries.append({"docno": dn, "title": title})
+                if len(mix) < 3:
+                    mix.append(dn)
+                if len(entries) >= DOCNO_LIST_CAP:
                     break
             cell["color_mix"] = mix
-            mentioned_docnos.update(mix)
+            cell["entries"]   = entries
+            mentioned_docnos.update(e["docno"] for e in entries)
         days.append(cell)
 
     return {

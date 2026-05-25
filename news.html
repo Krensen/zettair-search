@@ -521,7 +521,10 @@
     padding: 4px 0;
   }
   .day-cell {
-    aspect-ratio: 1 / 1;
+    /* No hard aspect-ratio; rows grow with content. The grid keeps
+       columns aligned, so all cells in the same row land at the
+       tallest cell's height — i.e. a busy day stretches its row. */
+    min-height: 110px;
     border-radius: 8px;
     background: var(--surface);
     border: 1px solid var(--line);
@@ -570,17 +573,35 @@
     background: var(--accent);
     vertical-align: middle;
   }
-  .day-cell .top-title {
-    font-size: 0.7rem;
+  /* Per-day entity list. Each entry is a single-line pill carrying
+     the entity name only; the entity-tag border picks up the entity
+     colour from --slot-color. As many fit as the row height allows;
+     a trailing "+N more" placeholder appears when the list was
+     capped at the server. */
+  .day-cell .entry-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 2px 6px 0;
+    min-width: 0;
+  }
+  .day-cell .entry {
+    font-size: 0.65rem;
     font-weight: 600;
-    line-height: 1.25;
+    line-height: 1.15;
     color: var(--text);
-    padding: 2px 8px 0;
-    /* Clamp to 2 lines so cells stay roughly even-height. */
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.55);
+    border-left: 2px solid var(--slot-color, var(--ent-default));
+    white-space: nowrap;
     overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .day-cell .more {
+    font-size: 0.62rem;
+    color: var(--muted);
+    padding: 1px 6px;
   }
   .day-cell .count {
     font-size: 0.62rem;
@@ -616,9 +637,13 @@
     .brick, .brick.size-m { grid-column: span 1; grid-row: span 1; }
     .brick.size-l { grid-column: span 2; grid-row: span 1; }
     .brick.size-xl { grid-column: span 2; grid-row: span 2; }
-    /* Month grid: keep 7 columns but compact cells; hide the title preview, just dot + count. */
+    /* Month grid: keep 7 columns but compact cells. Show at most 2
+       entry pills, hide the rest behind the more-counter. */
     .month-grid { gap: 4px; }
-    .day-cell .top-title { display: none; }
+    .day-cell { min-height: 88px; }
+    .day-cell .entry-list { gap: 2px; padding: 2px 4px 0; }
+    .day-cell .entry { font-size: 0.58rem; padding: 1px 4px; }
+    .day-cell .entry:nth-of-type(n+3) { display: none; }
     .day-cell .num { font-size: 0.74rem; padding: 4px 6px 0; }
     .day-cell .count { font-size: 0.58rem; padding: 0 6px 3px; }
   }
@@ -966,12 +991,24 @@
       ).join('');
       const topPara = (cell.top_paragraph || cell.top_title || '').slice(0, 180);
       const titleAttr = esc(topPara.replace(/"/g, "'"));
+      // Entry list: one pill per distinct entity for the day, in
+      // rank order. Each pill carries its own slot colour as a
+      // left-border accent so the visual mix is legible.
+      const entries = cell.entries || [];
+      const entriesHtml = entries.map(e => {
+        const slot = colors[e.docno];
+        return `<div class="entry" style="--slot-color: ${strongVar(slot)};"
+                     title="${esc(e.title)}">${esc(e.title)}</div>`;
+      }).join('');
+      const remaining = cell.count - entries.length;
+      const moreHtml = remaining > 0
+        ? `<div class="more">+${remaining} more</div>` : '';
       return `<a class="day-cell has-events ${isToday ? 'today' : ''}"
                   href="/news/${esc(cell.date)}"
                   style="${styleVars}"
                   title="${titleAttr}">
         <div class="num">${dayNum}</div>
-        <div class="top-title">${esc(cell.top_title || '')}</div>
+        <div class="entry-list">${entriesHtml}${moreHtml}</div>
         <div class="count">${cell.count} event${cell.count === 1 ? '' : 's'}</div>
         <div class="mix">${mixHtml}</div>
       </a>`;
