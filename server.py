@@ -844,6 +844,13 @@ async def trending(n: int = Query(8, ge=1, le=50)):
         }
         if not in_index and docno:
             entry["wiki_url"] = f"https://en.wikipedia.org/wiki/{docno}"
+        # iOS home view needs a thumbnail per chip; surface it here
+        # to save N parallel /search?n=1 calls. Same lookup pattern
+        # enrich_results uses. Missing/absent = no image.
+        if docno:
+            img = _images_store.get(docno)
+            if img:
+                entry["image_url"] = img
         out.append(entry)
     return {
         "mode": payload.get("mode", "raw"),
@@ -853,17 +860,30 @@ async def trending(n: int = Query(8, ge=1, le=50)):
 
 
 _THUMB_SIZE_RE = re.compile(r"/(\d+)px-")
+# Wikimedia's CDN only honours a fixed allowlist of thumbnail widths.
+# Anything else returns HTTP 400 with "Use thumbnail sizes listed on
+# https://w.wiki/GHai". Our image-store was historically built with
+# 300px URLs — not on the allowlist — so we coerce non-allowed widths
+# to the smallest allowed width that is >= requested (or the largest
+# allowed if request exceeds the ceiling).
+_WIKIMEDIA_ALLOWED_THUMB_WIDTHS = (20, 40, 60, 120, 250, 330, 500, 960, 1280, 1920, 3840)
 
 
-def _rewrite_thumb_size(url: str, target: int = 250) -> str:
-    """Wikimedia's CDN now whitelists a small set of thumbnail widths;
-    requests for non-whitelisted sizes (including the 300 our image
-    store was built with) return HTTP 400. Empirical probe: 250 / 330 /
-    500 are honoured, others rejected. Rewrite the last /{N}px-/ token
-    to target. Leaves non-thumbnail URLs untouched."""
+def _rewrite_thumb_size(url: str) -> str:
+    """If url's /{N}px-/ token isn't on the Wikimedia allowlist, rewrite
+    to the nearest allowed width >= N (or the max if N exceeds the
+    ceiling). Allowed widths pass through unchanged — this is critical
+    so that clients can request the size they want. Non-thumbnail URLs
+    (raw file fetches) pass through untouched."""
     m = _THUMB_SIZE_RE.search(url)
     if not m:
         return url
+    width = int(m.group(1))
+    if width in _WIKIMEDIA_ALLOWED_THUMB_WIDTHS:
+        return url
+    # Pick the smallest allowed width >= requested, else the ceiling.
+    target = next((w for w in _WIKIMEDIA_ALLOWED_THUMB_WIDTHS if w >= width),
+                  _WIKIMEDIA_ALLOWED_THUMB_WIDTHS[-1])
     return url[:m.start()] + f"/{target}px-" + url[m.end():]
 
 
@@ -887,25 +907,34 @@ async def image_proxy(url: str = Query(...)):
         )
     except Exception:
         return Response(status_code=400)
+    # Run blocking urllib call in a thread so the event loop isn't blocked.
+    # Wikimedia's anti-abuse layer 400s requests whose User-Agent doesn't
+    # include a contact (email or URL where they can reach the operator).
+    # Without it they return "Use thumbnail steps listed on …" — a
+    # misleading error that has nothing to do with the actual problem.
+    req = urllib.request.Request(safe_url, headers={
+        "User-Agent": "ZettairSearch/1.0 (https://zettair.io; hugh@viaaltoadvisors.com)",
+        "Referer": "https://zettair.io/",
+    })
+    loop = asyncio.get_event_loop()
+    def _fetch():
+        with urllib.request.urlopen(req, timeout=8) as r:
+            return r.status, r.read(), r.headers.get("Content-Type", "image/jpeg")
     try:
-        # Run blocking urllib call in a thread so the event loop isn't blocked.
-        # Wikimedia's anti-abuse layer 400s requests whose User-Agent doesn't
-        # include a contact (email or URL where they can reach the operator).
-        # Without it they return "Use thumbnail steps listed on …" — a
-        # misleading error that has nothing to do with the actual problem.
-        req = urllib.request.Request(safe_url, headers={
-            "User-Agent": "ZettairSearch/1.0 (https://zettair.io; hugh@viaaltoadvisors.com)",
-            "Referer": "https://zettair.io/",
-        })
-        loop = asyncio.get_event_loop()
-        def _fetch():
-            with urllib.request.urlopen(req, timeout=8) as r:
-                return r.read(), r.headers.get("Content-Type", "image/jpeg")
-        data, content_type = await loop.run_in_executor(None, _fetch)
-        return Response(content=data, media_type=content_type,
-                        headers={"Cache-Control": "public, max-age=86400"})
+        status, data, content_type = await loop.run_in_executor(None, _fetch)
+    except urllib.error.HTTPError as e:
+        # Pass the upstream code through. 404 means the file really is
+        # missing; 400/429 etc. mean Wikimedia rejected our request and
+        # should not be conflated with "image does not exist".
+        return Response(status_code=e.code)
+    except urllib.error.URLError:
+        # Network failure reaching Wikimedia — distinct from a 4xx from
+        # them. 502 Bad Gateway is the right semantic.
+        return Response(status_code=502)
     except Exception:
-        return Response(status_code=404)
+        return Response(status_code=502)
+    return Response(content=data, media_type=content_type, status_code=status,
+                    headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.get("/queries", response_class=HTMLResponse)
