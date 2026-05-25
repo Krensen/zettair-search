@@ -1,0 +1,20 @@
+[Unit]
+Description=PRD-029 events-index builder — dedupe trending journal, join images, emit events.jsonl + events.idx for the news-timeline route
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=zettair
+WorkingDirectory=/opt/zettair-search
+ExecStart=/usr/bin/python3 -u /opt/zettair-search/tools/build_events_index.py
+# Chain the entity-colour assignment right after the index build, so
+# /api/events sees a fresh colour map next time the service restarts.
+ExecStartPost=/usr/bin/python3 -u /opt/zettair-search/tools/build_entity_colors.py
+StandardOutput=journal
+StandardError=journal
+
+# A full build reads the journal (small, KB-MB), the entity-class
+# JSON (~30 MB loaded), and pulls image-store entries via FlatStore
+# (mmap'd). Peak heap is dominated by the entity-class dict.
+MemoryMax=512M

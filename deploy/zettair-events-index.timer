@@ -1,0 +1,16 @@
+[Unit]
+Description=PRD-029 events-index builder — daily timer at 04:10 UTC
+
+[Timer]
+# Daily at 04:10 UTC. The trending fetcher fires every hour and writes
+# to events.jsonl on its way through; building the index more often
+# than once a day is wasted work (the index is mostly read-only data
+# that only changes when a new sample with new event paragraphs
+# arrives, but those changes accumulate fine waiting until tomorrow).
+OnCalendar=*-*-* 04:10:00
+# Catch-up on boot if a fire was missed (laptop closed, VM paused).
+Persistent=true
+Unit=zettair-events-index.service
+
+[Install]
+WantedBy=timers.target

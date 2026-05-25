@@ -116,6 +116,19 @@ RELATED_CLASS_PATH = os.environ.get("ZET_RELATED_CLASS", "/mnt/wikipedia-source/
 # tools/build_reading_sidecar.py; loaded into RAM at startup.
 READING_SIDECAR_PATH = os.environ.get("ZET_READING_SIDECAR",
                                       os.path.join(_wiki_dir, "enwiki_top1m.reading.bin"))
+# PRD-029: news-timeline event index. Two files written by
+# tools/build_events_index.py — events.jsonl (per-event JSON Lines)
+# and events.idx (per-date byte-offset map). Server loads the idx at
+# startup; events.jsonl is range-read via os.pread per date request.
+EVENTS_JSONL_PATH = os.environ.get("ZET_EVENTS_JSONL",
+                                   "/mnt/wikipedia-source/trending/events.jsonl")
+EVENTS_IDX_PATH   = os.environ.get("ZET_EVENTS_IDX",
+                                   "/mnt/wikipedia-source/trending/events.idx")
+# PRD-029: stable per-docno colour assignments (entity-colour system).
+# Optional — missing file means every event renders in the neutral
+# default colour.
+EVENTS_COLORS_PATH = os.environ.get("ZET_EVENTS_COLORS",
+                                    "/mnt/wikipedia-source/trending/events.entity_colors.json")
 
 _autosuggest: list = []   # sorted list of (query, count) tuples
 
@@ -218,6 +231,86 @@ def _load_reading_sidecar() -> None:
               f"({len(_difficulty):,} with difficulty)", flush=True)
     except (OSError, struct.error) as e:
         print(f"WARNING: couldn't load {READING_SIDECAR_PATH}: {e}", flush=True)
+
+
+# PRD-029: news timeline. The idx is loaded into RAM at startup;
+# events.jsonl is read on demand via an open file descriptor + pread.
+# entity_colors is a tiny dict (~hundreds of entries).
+_events_idx: dict = {"event_date_index": {}, "total_events": 0}
+_events_fd: int = -1
+_entity_colors: dict[str, int] = {}
+
+
+def _load_events_index() -> None:
+    """Load events.idx and open events.jsonl for pread. Missing files
+    are tolerated — /news + /api/events will return empty payloads
+    until the daily builder runs."""
+    if not os.path.exists(EVENTS_IDX_PATH) or not os.path.exists(EVENTS_JSONL_PATH):
+        print(f"WARNING: events index not found at {EVENTS_IDX_PATH} — "
+              f"/news + /api/events will return empty until "
+              f"zettair-events-index.timer fires", flush=True)
+        return
+    try:
+        with open(EVENTS_IDX_PATH, encoding="utf-8") as f:
+            payload = json.load(f)
+        global _events_idx, _events_fd
+        if payload.get("version") != 1:
+            print(f"WARNING: {EVENTS_IDX_PATH} unsupported version "
+                  f"{payload.get('version')!r}", flush=True)
+            return
+        _events_idx = payload
+        _events_fd = os.open(EVENTS_JSONL_PATH, os.O_RDONLY)
+        ndates = len(payload.get("event_date_index", {}))
+        ntot = payload.get("total_events", 0)
+        size_kb = os.path.getsize(EVENTS_JSONL_PATH) / 1024
+        print(f"  events-index: {ntot:,} events across {ndates:,} dates "
+              f"({size_kb:.1f} KB)", flush=True)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"WARNING: couldn't load events index: {e}", flush=True)
+
+
+def _load_entity_colors() -> None:
+    """Load events.entity_colors.json into _entity_colors. Missing file
+    is fine — every event renders in the neutral default colour."""
+    if not os.path.exists(EVENTS_COLORS_PATH):
+        return
+    try:
+        with open(EVENTS_COLORS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        # Accept either {"docno": int} or {"colors": {"docno": int}}.
+        if isinstance(data, dict) and "colors" in data:
+            data = data["colors"]
+        if isinstance(data, dict):
+            _entity_colors.update({k: int(v) for k, v in data.items()
+                                   if isinstance(v, (int, float))})
+            print(f"  entity-colors: {len(_entity_colors):,} entries", flush=True)
+    except (OSError, json.JSONDecodeError, ValueError) as e:
+        print(f"WARNING: couldn't load entity colors: {e}", flush=True)
+
+
+def _read_events_for_date(ev_date: str) -> list[dict]:
+    """Return the list of event dicts for a single ISO date. Empty list
+    when the date has no events or the index isn't loaded."""
+    if _events_fd < 0:
+        return []
+    entry = _events_idx.get("event_date_index", {}).get(ev_date)
+    if not entry:
+        return []
+    offset, length = entry
+    try:
+        blob = os.pread(_events_fd, length, offset)
+    except OSError:
+        return []
+    out = []
+    for line in blob.decode("utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+    return out
 
 
 def _load_related_classes() -> None:
@@ -476,6 +569,8 @@ async def lifespan(app: FastAPI):
     _related_store.load()
     _load_related_classes()
     _load_reading_sidecar()
+    _load_events_index()
+    _load_entity_colors()
     _docstore.load()
     await _load_autosuggest()
     await _pool.start(ZET_WORKERS)
@@ -490,6 +585,11 @@ async def lifespan(app: FastAPI):
     _summaries_store.close()
     _related_store.close()
     _docstore.close()
+    if _events_fd >= 0:
+        try:
+            os.close(_events_fd)
+        except OSError:
+            pass
     await _pool.shutdown()
 
 
@@ -1046,6 +1146,96 @@ a:hover {{ text-decoration: underline; }}
 </table>
 </body></html>"""
     return HTMLResponse(html)
+
+
+# ---------------------------------------------------------------------------
+# PRD-029: news timeline endpoints (/news + /api/events)
+# ---------------------------------------------------------------------------
+
+def _parse_iso_date(s: str | None, default: datetime.date) -> datetime.date:
+    if not s:
+        return default
+    try:
+        return datetime.date.fromisoformat(s)
+    except ValueError:
+        return default
+
+
+def _events_in_range(start_d: datetime.date, end_d: datetime.date,
+                     per_day_cap: int) -> list[dict]:
+    """Pull events for every date in [start_d, end_d], newest first.
+    Caps each date at per_day_cap to keep payloads bounded; the cap
+    applies to the already-sorted-by-rank list inside events.jsonl."""
+    out: list[dict] = []
+    if start_d > end_d:
+        start_d, end_d = end_d, start_d
+    d = end_d
+    while d >= start_d:
+        events = _read_events_for_date(d.isoformat())
+        if events:
+            out.extend(events[:per_day_cap])
+        d -= datetime.timedelta(days=1)
+    return out
+
+
+@app.get("/api/events")
+async def api_events(
+    from_: str = Query(None, alias="from",
+                       description="UTC date YYYY-MM-DD inclusive. Default: 7 days before to."),
+    to:    str = Query(None, description="UTC date YYYY-MM-DD inclusive. Default: today (UTC)."),
+    per_day: int = Query(40, ge=1, le=200,
+                         description="Cap per-day; protects against runaway client requests."),
+):
+    """PRD-029: range read into the events index. Returns one flat
+    array sorted by event_date desc, then per-date rank_hint desc.
+    Used by both /news (server-rendered initial paint) and the iOS
+    app under PRD-028."""
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+    end_d   = _parse_iso_date(to, today)
+    start_d = _parse_iso_date(from_, end_d - datetime.timedelta(days=7))
+    # Cap range at 90 days; longer ranges go through the (future) year-zoom path.
+    if (end_d - start_d).days > 90:
+        start_d = end_d - datetime.timedelta(days=90)
+    events = _events_in_range(start_d, end_d, per_day)
+    return {
+        "from": start_d.isoformat(),
+        "to": end_d.isoformat(),
+        "count": len(events),
+        "events": events,
+        # Tiny inline colour map for the entities present in this range,
+        # so the client doesn't have to make a second call.
+        "entity_colors": {
+            e["docno"]: _entity_colors[e["docno"]]
+            for e in events
+            if e.get("docno") in _entity_colors
+        },
+        "built_at": _events_idx.get("built_at"),
+    }
+
+
+_NEWS_HTML_PATH = os.path.join(os.path.dirname(__file__), "news.html")
+_news_html: str = ""
+
+
+def _load_news_html() -> str:
+    global _news_html
+    if not _news_html and os.path.exists(_NEWS_HTML_PATH):
+        with open(_NEWS_HTML_PATH, encoding="utf-8") as f:
+            _news_html = f.read()
+    return _news_html
+
+
+@app.get("/news", response_class=HTMLResponse)
+async def news_page():
+    """PRD-029: news timeline. Served from a separate news.html so the
+    main index.html stays untouched during the soft-launch. After
+    promotion (if it happens), the two are merged."""
+    html = _load_news_html()
+    if not html:
+        return HTMLResponse("<h1>News timeline coming soon</h1>"
+                            "<p>The events index has not been built yet.</p>",
+                            status_code=503)
+    return html
 
 
 @app.get("/", response_class=HTMLResponse)

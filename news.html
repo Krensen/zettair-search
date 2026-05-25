@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>News — as Wikipedia tells it · zettair</title>
+<meta name="description" content="The news, as Wikipedia tells it: a daily timeline of events from Wikipedia article paragraphs, sourced and dated.">
+<style>
+  :root {
+    --bg:        #fafafa;
+    --surface:   #ffffff;
+    --text:      #202124;
+    --muted:     #5f6368;
+    --line:      #e8eaed;
+    --accent:    #1a73e8;
+    --accent-bg: #e8f0fe;
+    /* Entity palette — 16 colours, WCAG-AA against white text where
+       used as card background, and against the muted-grey body where
+       used as accent stripes. */
+    --ent-default: #5f6368;
+    --ent-1:  #c5221f;  /* red       */
+    --ent-2:  #f4a300;  /* amber     */
+    --ent-3:  #137333;  /* green     */
+    --ent-4:  #1a73e8;  /* blue      */
+    --ent-5:  #6a1b9a;  /* purple    */
+    --ent-6:  #b34c00;  /* burnt-orange */
+    --ent-7:  #00838f;  /* teal      */
+    --ent-8:  #4257b2;  /* indigo    */
+    --ent-9:  #c45091;  /* magenta   */
+    --ent-10: #6a4c00;  /* olive     */
+    --ent-11: #00695c;  /* deep teal */
+    --ent-12: #8e24aa;  /* violet    */
+    --ent-13: #1565c0;  /* deep blue */
+    --ent-14: #ad1457;  /* crimson   */
+    --ent-15: #2e7d32;  /* forest    */
+    --ent-16: #5d4037;  /* brown     */
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  body { padding-bottom: 64px; }
+
+  /* ── Sticky toolbar ─────────────────────────────────────────────── */
+  .toolbar-wrap {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(250, 250, 250, 0.88);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+  }
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 10px 16px;
+  }
+  .logo {
+    font-weight: 800;
+    color: var(--accent);
+    font-size: 1.1rem;
+    letter-spacing: -0.02em;
+    text-decoration: none;
+  }
+  .search-pill {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 6px 14px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    transition: border-color 140ms ease, box-shadow 140ms ease;
+  }
+  .search-pill:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-bg);
+  }
+  .search-pill svg {
+    width: 16px; height: 16px;
+    stroke: var(--muted);
+    stroke-width: 2;
+    fill: none;
+  }
+  .search-pill input {
+    flex: 1;
+    border: none;
+    outline: none;
+    background: transparent;
+    font: inherit;
+    color: var(--text);
+    padding: 4px 0;
+  }
+  .kbd {
+    font-size: 0.7rem;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1px 5px;
+    user-select: none;
+  }
+
+  /* ── Page header ────────────────────────────────────────────────── */
+  .page-header {
+    max-width: 880px;
+    margin: 32px auto 8px;
+    padding: 0 20px;
+  }
+  .page-header h1 {
+    margin: 0;
+    font-size: 1.7rem;
+    letter-spacing: -0.02em;
+    font-weight: 700;
+  }
+  .page-header .lede {
+    margin: 4px 0 0;
+    color: var(--muted);
+    font-size: 0.92rem;
+  }
+  .page-header .meta {
+    margin-top: 10px;
+    font-size: 0.74rem;
+    color: var(--muted);
+  }
+  .page-header .meta a { color: var(--muted); text-decoration: underline dotted; }
+
+  /* ── Timeline ───────────────────────────────────────────────────── */
+  .timeline {
+    max-width: 880px;
+    margin: 28px auto 0;
+    padding: 0 20px 0 110px;
+    position: relative;
+  }
+  .timeline::before {
+    content: '';
+    position: absolute;
+    left: 90px;
+    top: 4px;
+    bottom: 4px;
+    width: 2px;
+    background: var(--line);
+  }
+  .day {
+    position: relative;
+    margin-bottom: 36px;
+  }
+  .day-label {
+    position: absolute;
+    left: -100px;
+    top: 2px;
+    width: 88px;
+    text-align: right;
+    line-height: 1.1;
+  }
+  .day-label .num {
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: var(--text);
+    display: block;
+  }
+  .day-label .dow {
+    font-size: 0.74rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .day::before {
+    content: '';
+    position: absolute;
+    left: -22px;
+    top: 14px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 2px solid var(--accent);
+    z-index: 1;
+  }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 14px;
+  }
+  .card {
+    background: var(--surface);
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    transition: transform 160ms ease, box-shadow 160ms ease;
+    text-decoration: none;
+    color: inherit;
+  }
+  .card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+  }
+  .card .image {
+    aspect-ratio: 16/10;
+    background: var(--ent-color, var(--ent-default));
+    position: relative;
+    overflow: hidden;
+  }
+  .card .image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center top;
+    display: block;
+  }
+  .card .image::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(to top, rgba(0,0,0,0.40) 0%, rgba(0,0,0,0) 60%);
+  }
+  .card .entity-tag {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 2;
+    padding: 2px 9px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.92);
+    color: var(--ent-color, var(--ent-default));
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+  .card .body {
+    padding: 12px 14px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+  .card .title {
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.3;
+    margin: 0 0 6px;
+  }
+  .card .blurb {
+    font-size: 0.86rem;
+    color: var(--muted);
+    line-height: 1.45;
+    margin: 0;
+    /* Clamp to 4 lines so cards stay roughly even-height. */
+    display: -webkit-box;
+    -webkit-line-clamp: 4;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .card .source-line {
+    margin-top: 10px;
+    font-size: 0.72rem;
+    color: var(--muted);
+  }
+  .card .source-line a { color: var(--muted); text-decoration: underline dotted; }
+
+  /* Empty state */
+  .empty {
+    max-width: 720px;
+    margin: 60px auto;
+    padding: 24px;
+    text-align: center;
+    border: 1px dashed var(--line);
+    border-radius: 12px;
+    color: var(--muted);
+  }
+  .empty code { background: var(--accent-bg); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem; }
+
+  /* Footer disclaimer */
+  .footer-note {
+    max-width: 720px;
+    margin: 48px auto 0;
+    padding: 0 20px;
+    font-size: 0.78rem;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+
+  /* Responsive */
+  @media (max-width: 640px) {
+    .timeline {
+      padding-left: 64px;
+      padding-right: 16px;
+    }
+    .timeline::before { left: 44px; }
+    .day-label { left: -56px; width: 50px; }
+    .day-label .num { font-size: 1.4rem; }
+    .day::before { left: -22px; }
+    .cards { grid-template-columns: 1fr; }
+    .page-header { padding: 0 16px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="toolbar-wrap">
+  <div class="toolbar">
+    <a class="logo" href="/" aria-label="zettair home">Z</a>
+    <form class="search-pill" action="/" method="get" role="search">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="11" cy="11" r="7"/>
+        <line x1="16.5" y1="16.5" x2="21" y2="21" stroke-linecap="round"/>
+      </svg>
+      <input id="searchInput" name="q" autocomplete="off"
+             placeholder="Search Wikipedia"
+             aria-label="Search Wikipedia">
+      <span class="kbd">⌘K</span>
+    </form>
+  </div>
+</header>
+
+<section class="page-header">
+  <h1>The news, as Wikipedia tells it</h1>
+  <p class="lede">A daily timeline of events from Wikipedia article paragraphs — slower than newspapers, sourced and dated. <a href="/" style="color: var(--accent); text-decoration: none;">Search</a> too.</p>
+  <p class="meta" id="metaLine"></p>
+</section>
+
+<main class="timeline" id="timeline" aria-live="polite"></main>
+
+<p class="footer-note">
+  Events on this page are dated paragraphs extracted from Wikipedia articles when those articles trended. The text is what Wikipedia editors wrote; we are surfacing it, not summarising it. Some events fall back to news headlines when Wikipedia has not yet documented them, in which case the source is marked.
+</p>
+
+<script>
+(() => {
+  const timeline = document.getElementById('timeline');
+  const metaLine = document.getElementById('metaLine');
+  const searchInput = document.getElementById('searchInput');
+
+  // Focus the search box on '/' or Cmd+K, like Google.
+  document.addEventListener('keydown', (e) => {
+    if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
+    if (e.key === '/' || (e.key === 'k' && (e.metaKey || e.ctrlKey))) {
+      e.preventDefault();
+      searchInput.focus();
+    }
+  });
+
+  const esc = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const proxyImg = (u) => u ? `/img?url=${encodeURIComponent(u)}` : null;
+  const titleOf = (docno) => docno.replace(/_/g, ' ');
+
+  // Group events by event_date.
+  function groupByDate(events) {
+    const groups = new Map();
+    for (const e of events) {
+      const d = e.event_date;
+      if (!d) continue;
+      if (!groups.has(d)) groups.set(d, []);
+      groups.get(d).push(e);
+    }
+    return Array.from(groups.entries()).sort((a, b) => b[0].localeCompare(a[0]));
+  }
+
+  function formatDayLabel(iso) {
+    // iso = YYYY-MM-DD; render in viewer's local timezone for the
+    // day-of-week label, but keep the date number aligned with the
+    // UTC date the event index was built against.
+    const [y, m, d] = iso.split('-').map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    const dow = dt.toLocaleDateString(undefined, { weekday: 'short', timeZone: 'UTC' });
+    const month = dt.toLocaleDateString(undefined, { month: 'short', timeZone: 'UTC' });
+    return { num: String(d), dow: `${dow} · ${month}` };
+  }
+
+  function colorVar(colors, docno) {
+    const slot = colors[docno];
+    if (slot && slot >= 1 && slot <= 16) return `var(--ent-${slot})`;
+    return 'var(--ent-default)';
+  }
+
+  function render(payload) {
+    const events = payload.events || [];
+    if (!events.length) {
+      timeline.innerHTML = '';
+      timeline.insertAdjacentHTML('beforeend',
+        `<div class="empty">
+           <p>No events yet for ${esc(payload.from)} → ${esc(payload.to)}.</p>
+           <p>The timeline fills in from the trending pipeline. Once the
+              daily build has run, events appear here. Try
+              <code>sudo systemctl start zettair-events-index.service</code>
+              if you are the operator.</p>
+         </div>`);
+      return;
+    }
+    const colors = payload.entity_colors || {};
+    const groups = groupByDate(events);
+    const parts = [];
+    for (const [date, evs] of groups) {
+      const { num, dow } = formatDayLabel(date);
+      const cards = evs.map(e => {
+        const color = colorVar(colors, e.docno);
+        const title = e.title || titleOf(e.docno || '');
+        const para = e.event_paragraph || '';
+        const img = e.image_url ? `<img src="${esc(proxyImg(e.image_url))}" alt=""
+          onerror="this.style.display='none'">` : '';
+        const sourceLabel = e.event_source === 'news_rss' ? 'via news headlines' : 'from Wikipedia';
+        const searchHref = `/?q=${encodeURIComponent(title)}`;
+        return `<a class="card" href="${esc(searchHref)}" style="--ent-color: ${color};">
+          <div class="image">
+            <span class="entity-tag">${esc(title)}</span>
+            ${img}
+          </div>
+          <div class="body">
+            <h2 class="title">${esc(title)}</h2>
+            <p class="blurb">${esc(para)}</p>
+            <p class="source-line">${esc(sourceLabel)}</p>
+          </div>
+        </a>`;
+      }).join('');
+      parts.push(`<section class="day">
+        <div class="day-label"><span class="num">${esc(num)}</span><span class="dow">${esc(dow)}</span></div>
+        <div class="cards">${cards}</div>
+      </section>`);
+    }
+    timeline.innerHTML = parts.join('');
+    metaLine.textContent = `Showing ${events.length} events from ${payload.from} to ${payload.to}.`
+      + (payload.built_at ? ` Index built ${payload.built_at.slice(0, 10)}.` : '');
+  }
+
+  // Initial fetch: last 7 days.
+  fetch('/api/events?per_day=20')
+    .then(r => r.ok ? r.json() : Promise.reject(r.status))
+    .then(render)
+    .catch(err => {
+      timeline.innerHTML = `<div class="empty"><p>Could not load events (${esc(String(err))}).</p></div>`;
+    });
+})();
+</script>
+
+</body>
+</html>
