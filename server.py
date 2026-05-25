@@ -1227,15 +1227,56 @@ def _load_news_html() -> str:
 
 @app.get("/news", response_class=HTMLResponse)
 async def news_page():
-    """PRD-029: news timeline. Served from a separate news.html so the
-    main index.html stays untouched during the soft-launch. After
-    promotion (if it happens), the two are merged."""
+    """PRD-029: news timeline (week view). The same news.html also
+    serves the day-detail view at /news/{date}; the client reads
+    location.pathname to decide which mode to render."""
     html = _load_news_html()
     if not html:
         return HTMLResponse("<h1>News timeline coming soon</h1>"
                             "<p>The events index has not been built yet.</p>",
                             status_code=503)
     return html
+
+
+@app.get("/news/{ev_date}", response_class=HTMLResponse)
+async def news_day_page(ev_date: str):
+    """Day-detail view: one date, masonry-brick layout.
+
+    Validates ev_date is a real YYYY-MM-DD so we don't serve the page
+    for nonsense paths that would otherwise look like a 200 with an
+    empty render. Invalid -> 404."""
+    try:
+        datetime.date.fromisoformat(ev_date)
+    except ValueError:
+        return HTMLResponse("<h1>404</h1>", status_code=404)
+    html = _load_news_html()
+    if not html:
+        return HTMLResponse("<h1>News timeline coming soon</h1>"
+                            "<p>The events index has not been built yet.</p>",
+                            status_code=503)
+    return html
+
+
+@app.get("/api/events/day/{ev_date}")
+async def api_events_day(ev_date: str):
+    """Single-day convenience: returns every event for the date,
+    no per-day cap, already sorted by rank_hint desc."""
+    try:
+        datetime.date.fromisoformat(ev_date)
+    except ValueError:
+        return JSONResponse({"error": "ev_date must be YYYY-MM-DD"}, status_code=400)
+    events = _read_events_for_date(ev_date)
+    return {
+        "date": ev_date,
+        "count": len(events),
+        "events": events,
+        "entity_colors": {
+            e["docno"]: _entity_colors[e["docno"]]
+            for e in events
+            if e.get("docno") in _entity_colors
+        },
+        "built_at": _events_idx.get("built_at"),
+    }
 
 
 @app.get("/", response_class=HTMLResponse)
