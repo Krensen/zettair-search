@@ -138,6 +138,20 @@
       display: block;
       animation: rail-in 480ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
     }
+    /* Faded state when current.json is >24h old (e.g. Wikimedia
+       pageview dump publishing has stalled upstream). Whole rail
+       drops opacity so it does not present as fresh news. */
+    .trending-rail.stale .trending-rail-inner {
+      opacity: 0.55;
+      transition: opacity 240ms ease;
+    }
+    .trending-rail .rail-age {
+      margin-left: 6px;
+      opacity: 0.7;
+      font-weight: 500;
+      letter-spacing: 0;
+      text-transform: none;
+    }
 
     /* Label + chips share one row on wide screens, stack on narrow. */
     .trending-rail-inner {
@@ -1536,11 +1550,28 @@
       // still applies for the first-week raw-mode fallback.
       const labelText = isSpike ? 'News' : 'Popular';
       const labelIcon = isSpike ? TREND_ICON : SPARK_ICON;
+      // Staleness hint: if current.json is older than the threshold,
+      // fade the rail + append "(N h ago)" so users do not read it as
+      // fresh news. Upstream pageview-dump publishing has been known
+      // to stall for >24h (Wikimedia incident on 2026-05-22).
+      const STALE_THRESHOLD_HOURS = 24;
+      let ageHours = null;
+      if (data.generated_at) {
+        const t = Date.parse(data.generated_at);
+        if (!isNaN(t)) ageHours = (Date.now() - t) / 3600000;
+      }
+      const isStale = ageHours !== null && ageHours > STALE_THRESHOLD_HOURS;
       const inner = document.createElement('div');
       inner.className = 'trending-rail-inner';
       const lbl = document.createElement('div');
       lbl.className = 'trending-rail-label';
-      lbl.innerHTML = labelIcon + '<span>' + labelText + '</span>';
+      let ageHtml = '';
+      if (isStale) {
+        const ageText = ageHours < 48 ? `${Math.round(ageHours)}h ago`
+                                       : `${Math.round(ageHours / 24)}d ago`;
+        ageHtml = `<span class="rail-age" title="Wikimedia pageview dumps have not updated since this time">(${ageText})</span>`;
+      }
+      lbl.innerHTML = labelIcon + '<span>' + labelText + '</span>' + ageHtml;
       inner.appendChild(lbl);
       data.items.forEach(it => {
         const a = document.createElement('a');
@@ -1564,6 +1595,7 @@
       rail.innerHTML = '';
       rail.appendChild(inner);
       rail.classList.add('ready');
+      rail.classList.toggle('stale', isStale);
     };
     const fetchOnce = () => {
       lastFetchMs = Date.now();

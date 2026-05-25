@@ -336,11 +336,16 @@ def latest_complete_hour() -> dt.datetime:
     return target
 
 
-def fetch_latest_available(max_lookback_hours: int = 12) -> tuple[dt.datetime, dict[str, int]] | None:
+def fetch_latest_available(max_lookback_hours: int = 96) -> tuple[dt.datetime, dict[str, int]] | None:
     """Try the latest hour; on 404 walk back hour-by-hour until we find
     a published dump. Returns (hour, counts) or None if nothing in the
-    last `max_lookback_hours` is available — extremely unlikely unless
-    dumps.wikimedia.org is down."""
+    last `max_lookback_hours` is available.
+
+    Lookback bumped from 12 to 96 after the 2026-05-22 Wikimedia
+    publishing outage (~62 h gap), which left current.json frozen
+    until a manual catch-up. With 96 h of lookback, the next post-
+    outage run automatically reaches back far enough to pick up
+    whatever fresh hour appears."""
     start = latest_complete_hour()
     for h in range(max_lookback_hours):
         hour = start - dt.timedelta(hours=h)
