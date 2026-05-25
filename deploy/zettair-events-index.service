@@ -8,6 +8,9 @@ Type=oneshot
 User=zettair
 WorkingDirectory=/opt/zettair-search
 ExecStart=/usr/bin/python3 -u /opt/zettair-search/tools/build_events_index.py
+# Chain the entity-colour assignment right after the index build, so
+# /api/events sees a fresh colour map next time the service restarts.
+ExecStartPost=/usr/bin/python3 -u /opt/zettair-search/tools/build_entity_colors.py
 StandardOutput=journal
 StandardError=journal
 
