@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>News timeline — design variants</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --card: #fff;
+    --text: #202124;
+    --muted: #5f6368;
+    --line: #e8eaed;
+    --accent: #1a73e8;
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    margin: 0;
+    padding: 32px 24px;
+  }
+  .variant {
+    max-width: 1100px;
+    margin: 0 auto 64px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .variant-header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--line);
+    background: #fbfbfc;
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+  }
+  .variant-label {
+    font-size: 0.72rem;
+    color: #aaa;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .variant-name { font-size: 0.92rem; font-weight: 600; }
+  .variant-desc { font-size: 0.78rem; color: var(--muted); }
+  .variant-body { padding: 20px; }
+
+  /* ── Shared "sticky search bar" header for the Heavy variants ─── */
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 16px;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    max-width: 540px;
+    margin: 0 auto 18px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  .toolbar .logo {
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: -0.02em;
+  }
+  .toolbar input {
+    flex: 1;
+    border: none;
+    outline: none;
+    font: inherit;
+    background: transparent;
+    padding: 6px 0;
+    color: var(--text);
+  }
+  .toolbar .kbd {
+    font-size: 0.7rem;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+
+  /* ── Variant A: horizontal scroll, day-by-day cards ───────────── */
+  .h-rail {
+    display: flex;
+    gap: 12px;
+    overflow-x: auto;
+    padding: 4px 4px 12px;
+    scrollbar-width: thin;
+  }
+  .h-rail::-webkit-scrollbar { height: 6px; }
+  .day-block {
+    flex: 0 0 280px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px;
+    background: #fff;
+  }
+  .day-block .day-label {
+    font-size: 0.7rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .event {
+    display: flex;
+    gap: 8px;
+    padding: 6px 0;
+    align-items: flex-start;
+  }
+  .event + .event { border-top: 1px dashed var(--line); }
+  .event .entity-strip {
+    flex-shrink: 0;
+    width: 3px;
+    align-self: stretch;
+    border-radius: 2px;
+  }
+  .event .e-text { font-size: 0.78rem; line-height: 1.4; }
+  .event .e-text a { color: var(--accent); text-decoration: none; font-weight: 500; }
+
+  /* ── Variant B: vertical timeline with image cards ────────────── */
+  .v-timeline { position: relative; padding-left: 80px; }
+  .v-timeline::before {
+    content: '';
+    position: absolute;
+    left: 60px;
+    top: 4px;
+    bottom: 4px;
+    width: 2px;
+    background: var(--line);
+  }
+  .v-day {
+    position: relative;
+    margin-bottom: 28px;
+  }
+  .v-day-label {
+    position: absolute;
+    left: -80px;
+    top: 6px;
+    width: 70px;
+    text-align: right;
+    font-size: 0.74rem;
+    color: var(--muted);
+    line-height: 1.2;
+  }
+  .v-day-label .num { font-size: 1.4rem; color: var(--text); font-weight: 600; display: block; }
+  .v-day::before {
+    content: '';
+    position: absolute;
+    left: -22px;
+    top: 14px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--card);
+    border: 2px solid var(--accent);
+    z-index: 1;
+  }
+  .v-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
+  }
+  .v-card {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+    background: #fff;
+    display: flex;
+    flex-direction: column;
+  }
+  .v-card .img-block {
+    aspect-ratio: 16/10;
+    background: linear-gradient(135deg,#cfd8dc,#90a4ae);
+    position: relative;
+  }
+  .v-card .img-block::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.18);
+  }
+  .v-card .entity-tag {
+    position: absolute;
+    top: 8px; left: 8px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.66rem;
+    color: #fff;
+    font-weight: 600;
+    backdrop-filter: blur(4px);
+    background: rgba(0,0,0,0.4);
+    z-index: 2;
+  }
+  .v-card .body {
+    padding: 10px 12px;
+  }
+  .v-card .title {
+    font-size: 0.86rem;
+    font-weight: 600;
+    line-height: 1.3;
+    margin: 0 0 4px;
+  }
+  .v-card .blurb {
+    font-size: 0.74rem;
+    color: var(--muted);
+    line-height: 1.4;
+  }
+
+  /* ── Entity colours (deterministic hash demo, hand-picked here) ── */
+  .ent-iran     { background: #c5221f; }
+  .ent-ukraine  { background: #f4a300; }
+  .ent-openai   { background: #137333; }
+  .ent-trump    { background: #c45091; }
+  .ent-china    { background: #b34c00; }
+  .ent-spacex   { background: #4257b2; }
+  .ent-football { background: #1a73e8; }
+  .ent-uk       { background: #6a1b9a; }
+  .ent-default  { background: #5f6368; }
+
+  /* ── Variant C: brick / masonry grid for a single day ─────────── */
+  .brick {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    grid-auto-rows: 90px;
+    gap: 10px;
+  }
+  .brick .b {
+    border-radius: 8px;
+    background: #ccd1d6;
+    position: relative;
+    overflow: hidden;
+    color: #fff;
+    cursor: pointer;
+    transition: transform 160ms ease;
+  }
+  .brick .b:hover { transform: translateY(-2px); }
+  .brick .b::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(to top, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.05) 50%);
+  }
+  .brick .b .label {
+    position: absolute;
+    bottom: 8px;
+    left: 10px;
+    right: 10px;
+    z-index: 2;
+    font-size: 0.74rem;
+    font-weight: 600;
+    line-height: 1.2;
+  }
+  .brick .b .entity {
+    position: absolute;
+    top: 8px; left: 8px;
+    z-index: 2;
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.85);
+    color: #202124;
+    font-size: 0.6rem;
+    font-weight: 600;
+  }
+  .b.s-2x1 { grid-column: span 2; }
+  .b.s-3x2 { grid-column: span 3; grid-row: span 2; }
+  .b.s-2x2 { grid-column: span 2; grid-row: span 2; }
+  .b.bg-iran { background: linear-gradient(135deg, #ef9a9a, #c5221f); }
+  .b.bg-ukraine { background: linear-gradient(135deg, #ffe082, #f4a300); }
+  .b.bg-openai  { background: linear-gradient(135deg, #a5d6a7, #137333); }
+  .b.bg-trump   { background: linear-gradient(135deg, #f3aacd, #c45091); }
+  .b.bg-china   { background: linear-gradient(135deg, #ffcc80, #b34c00); }
+  .b.bg-football{ background: linear-gradient(135deg, #90caf9, #1a73e8); }
+  .b.bg-uk      { background: linear-gradient(135deg, #ce93d8, #6a1b9a); }
+  .b.bg-spacex  { background: linear-gradient(135deg, #9fa8da, #4257b2); }
+
+  /* ── Variant D: deep-zoom strip (year view) ───────────────────── */
+  .year-strip {
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 4px;
+    align-items: end;
+    height: 140px;
+    margin-bottom: 14px;
+  }
+  .month-col {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 2px;
+    height: 100%;
+  }
+  .month-col .seg {
+    border-radius: 2px;
+    min-height: 4px;
+    transition: opacity 160ms ease;
+  }
+  .month-col:hover .seg { opacity: 0.7; }
+  .month-col:hover .seg:hover { opacity: 1; }
+  .month-axis {
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    font-size: 0.65rem;
+    color: var(--muted);
+    text-align: center;
+  }
+
+  /* ── Variant E: zoom levels diagram (info only) ───────────────── */
+  .zoom-levels { display: flex; gap: 14px; align-items: stretch; }
+  .zoom-card {
+    flex: 1;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px;
+    background: #fff;
+  }
+  .zoom-card h4 { margin: 0 0 4px; font-size: 0.82rem; }
+  .zoom-card p { margin: 0; font-size: 0.74rem; color: var(--muted); line-height: 1.4; }
+
+  hr.section { border: none; border-top: 1px dashed var(--line); margin: 48px auto; max-width: 700px; }
+  h2 { max-width: 1100px; margin: 0 auto 12px; font-size: 1rem; font-weight: 600; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<h2>Variant A — horizontal scroll, day-by-day (lightest)</h2>
+<div class="variant">
+  <div class="variant-header">
+    <span class="variant-label">A</span>
+    <span class="variant-name">Day cards in a horizontal rail</span>
+    <span class="variant-desc">— closest to today's chip rail; just bigger and scrollable</span>
+  </div>
+  <div class="variant-body">
+    <div class="h-rail">
+      <div class="day-block">
+        <div class="day-label">Mon · 25 May</div>
+        <div class="event"><span class="entity-strip ent-iran"></span><span class="e-text"><a>Iran</a> announced new uranium-enrichment limits in talks with the IAEA.</span></div>
+        <div class="event"><span class="entity-strip ent-openai"></span><span class="e-text"><a>OpenAI</a> released a new long-context API tier with revised pricing.</span></div>
+        <div class="event"><span class="entity-strip ent-football"></span><span class="e-text"><a>Manchester City</a> won the Premier League title for the fifth season running.</span></div>
+      </div>
+      <div class="day-block">
+        <div class="day-label">Sun · 24 May</div>
+        <div class="event"><span class="entity-strip ent-ukraine"></span><span class="e-text"><a>Ukraine</a> shot down a record number of drones in overnight strikes.</span></div>
+        <div class="event"><span class="entity-strip ent-china"></span><span class="e-text"><a>Hong Kong</a> held municipal elections under revised candidate rules.</span></div>
+      </div>
+      <div class="day-block">
+        <div class="day-label">Sat · 23 May</div>
+        <div class="event"><span class="entity-strip ent-iran"></span><span class="e-text"><a>Iran</a>: Tehran rejected fresh sanctions imposed by the EU.</span></div>
+        <div class="event"><span class="entity-strip ent-trump"></span><span class="e-text"><a>Tulsi Gabbard</a> testified before the Senate on intelligence reform.</span></div>
+        <div class="event"><span class="entity-strip ent-football"></span><span class="e-text"><a>Pep Guardiola</a> extended his Manchester City contract through 2028.</span></div>
+      </div>
+      <div class="day-block">
+        <div class="day-label">Fri · 22 May</div>
+        <div class="event"><span class="entity-strip ent-spacex"></span><span class="e-text"><a>SpaceX</a> launched a third Starship test flight to a 90-minute orbit.</span></div>
+        <div class="event"><span class="entity-strip ent-uk"></span><span class="e-text"><a>King Charles III</a> opened the Australian parliament during his state visit.</span></div>
+      </div>
+      <div class="day-block">
+        <div class="day-label">Thu · 21 May</div>
+        <div class="event"><span class="entity-strip ent-ukraine"></span><span class="e-text"><a>Ukraine</a>: drone-defence deal signed with German manufacturers.</span></div>
+        <div class="event"><span class="entity-strip ent-openai"></span><span class="e-text"><a>OpenAI</a> board confirmed new chief scientist appointment.</span></div>
+      </div>
+      <div class="day-block">
+        <div class="day-label">Wed · 20 May</div>
+        <div class="event"><span class="entity-strip ent-trump"></span><span class="e-text"><a>Russell Vought</a> confirmed as OMB director.</span></div>
+        <div class="event"><span class="entity-strip ent-iran"></span><span class="e-text"><a>Iran</a>: foreign minister gave press conference on nuclear-talks delays.</span></div>
+      </div>
+    </div>
+    <p style="margin: 10px 0 0; font-size: 0.74rem; color: var(--muted);">
+      Entity colour stripes give immediate visual memory — Iran's red appears on three of six days. Click any line → search for that entity. Click the day label → focus on that day. Search bar stays above as today.
+    </p>
+  </div>
+</div>
+
+<h2>Variant B — vertical timeline with image cards (medium-weight)</h2>
+<div class="variant">
+  <div class="variant-header">
+    <span class="variant-label">B</span>
+    <span class="variant-name">Scrollable vertical timeline</span>
+    <span class="variant-desc">— recognisably "the homepage is news now"; search lives in a sticky toolbar</span>
+  </div>
+  <div class="variant-body">
+    <div class="toolbar">
+      <span class="logo">Z</span>
+      <input placeholder="Search Wikipedia">
+      <span class="kbd">⌘K</span>
+    </div>
+    <div class="v-timeline">
+      <div class="v-day">
+        <div class="v-day-label"><span class="num">25</span>May 2026<br>Mon</div>
+        <div class="v-cards">
+          <div class="v-card">
+            <div class="img-block" style="background: linear-gradient(135deg,#c5221f,#7a0008);"><span class="entity-tag">Iran</span></div>
+            <div class="body"><div class="title">Iran agrees to phased IAEA inspections</div><div class="blurb">Tehran reaches a 12-month framework after EU mediation.</div></div>
+          </div>
+          <div class="v-card">
+            <div class="img-block" style="background: linear-gradient(135deg,#137333,#0a401b);"><span class="entity-tag">OpenAI</span></div>
+            <div class="body"><div class="title">OpenAI launches long-context tier</div><div class="blurb">New "Opus extended" model targets enterprise legal and research.</div></div>
+          </div>
+          <div class="v-card">
+            <div class="img-block" style="background: linear-gradient(135deg,#1a73e8,#0d3a72);"><span class="entity-tag">Football</span></div>
+            <div class="body"><div class="title">Manchester City wins fifth straight title</div><div class="blurb">Pep Guardiola's side draws 1-1 against Spurs to seal the league.</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="v-day">
+        <div class="v-day-label"><span class="num">24</span>May 2026<br>Sun</div>
+        <div class="v-cards">
+          <div class="v-card">
+            <div class="img-block" style="background: linear-gradient(135deg,#f4a300,#7a4f00);"><span class="entity-tag">Ukraine</span></div>
+            <div class="body"><div class="title">Ukraine downs record drone wave</div><div class="blurb">73 drones intercepted overnight; energy infrastructure spared.</div></div>
+          </div>
+          <div class="v-card">
+            <div class="img-block" style="background: linear-gradient(135deg,#b34c00,#5d2700);"><span class="entity-tag">Hong Kong</span></div>
+            <div class="body"><div class="title">Hong Kong holds municipal elections</div><div class="blurb">Revised candidate-vetting rules apply; turnout reported at 23%.</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="v-day">
+        <div class="v-day-label"><span class="num">23</span>May 2026<br>Sat</div>
+        <div class="v-cards">
+          <div class="v-card">
+            <div class="img-block" style="background: linear-gradient(135deg,#c5221f,#7a0008);"><span class="entity-tag">Iran</span></div>
+            <div class="body"><div class="title">Tehran rejects fresh EU sanctions</div><div class="blurb">Foreign ministry calls them "incompatible with the framework."</div></div>
+          </div>
+          <div class="v-card">
+            <div class="img-block" style="background: linear-gradient(135deg,#c45091,#671e4b);"><span class="entity-tag">US politics</span></div>
+            <div class="body"><div class="title">Tulsi Gabbard testifies before Senate</div><div class="blurb">Three hours of questioning on intelligence reform priorities.</div></div>
+          </div>
+          <div class="v-card">
+            <div class="img-block" style="background: linear-gradient(135deg,#1a73e8,#0d3a72);"><span class="entity-tag">Pep Guardiola</span></div>
+            <div class="body"><div class="title">Guardiola signs to 2028</div><div class="blurb">Two-year extension reported at £20m a year.</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p style="margin: 14px 0 0; font-size: 0.74rem; color: var(--muted);">
+      The entity-colour is now the whole card background, so a Iran-red card on three different days reads as a visual through-line. Wikipedia article images would fill the placeholders.
+    </p>
+  </div>
+</div>
+
+<h2>Variant C — masonry brick layout (the "front page")</h2>
+<div class="variant">
+  <div class="variant-header">
+    <span class="variant-label">C</span>
+    <span class="variant-name">Today's stories, brick layout</span>
+    <span class="variant-desc">— newspaper front-page energy; story importance varies tile size</span>
+  </div>
+  <div class="variant-body">
+    <div class="toolbar">
+      <span class="logo">Z</span>
+      <input placeholder="Search Wikipedia">
+      <span class="kbd">⌘K</span>
+    </div>
+    <div style="font-size: 0.78rem; color: var(--muted); margin: 6px 0 12px;">Monday 25 May 2026 — 12 events, sourced from Wikipedia paragraphs updated today</div>
+    <div class="brick">
+      <div class="b s-3x2 bg-iran"><span class="entity">Iran</span><span class="label">Iran agrees to phased IAEA inspections in 12-month framework</span></div>
+      <div class="b s-2x2 bg-openai"><span class="entity">OpenAI</span><span class="label">OpenAI launches long-context API tier</span></div>
+      <div class="b bg-football"><span class="entity">Football</span><span class="label">Man City win 5th straight title</span></div>
+      <div class="b s-2x1 bg-ukraine"><span class="entity">Ukraine</span><span class="label">73 drones intercepted overnight</span></div>
+      <div class="b bg-trump"><span class="entity">US</span><span class="label">Vought confirmed at OMB</span></div>
+      <div class="b s-2x1 bg-spacex"><span class="entity">SpaceX</span><span class="label">Third Starship reaches orbit</span></div>
+      <div class="b bg-china"><span class="entity">HK</span><span class="label">Municipal elections held</span></div>
+      <div class="b bg-uk"><span class="entity">UK</span><span class="label">Charles opens Australian parliament</span></div>
+    </div>
+    <p style="margin: 12px 0 0; font-size: 0.74rem; color: var(--muted);">
+      Tile size reflects "news weight" — proxied by how many Wikipedia articles cite an event today, or by spike score. Click → search the entity. Scroll down → yesterday's bricks, then last week's grid, etc. Could also be the inside of a day-card in Variant B.
+    </p>
+  </div>
+</div>
+
+<h2>Variant D — zoomable year strip (the deep-zoom mechanic)</h2>
+<div class="variant">
+  <div class="variant-header">
+    <span class="variant-label">D</span>
+    <span class="variant-name">12-month density bars per entity</span>
+    <span class="variant-desc">— what "zoom out" looks like</span>
+  </div>
+  <div class="variant-body">
+    <div style="font-size: 0.78rem; color: var(--muted); margin: 0 0 12px;">2026 — top 8 entities, segmented by month. Bar height = days that month with an event paragraph. Hover a segment → preview the day. Click → zoom in to that month.</div>
+    <div class="year-strip">
+      <!-- Iran -->
+      <div class="month-col" title="Jan"><div class="seg ent-iran" style="height: 20%"></div></div>
+      <div class="month-col" title="Feb"><div class="seg ent-iran" style="height: 38%"></div></div>
+      <div class="month-col" title="Mar"><div class="seg ent-iran" style="height: 52%"></div><div class="seg ent-openai" style="height: 14%"></div></div>
+      <div class="month-col" title="Apr"><div class="seg ent-iran" style="height: 60%"></div><div class="seg ent-ukraine" style="height: 20%"></div></div>
+      <div class="month-col" title="May"><div class="seg ent-iran" style="height: 78%"></div><div class="seg ent-ukraine" style="height: 35%"></div><div class="seg ent-openai" style="height: 22%"></div><div class="seg ent-football" style="height: 18%"></div></div>
+      <div class="month-col" title="Jun"><div class="seg ent-default" style="height: 4%"></div></div>
+      <div class="month-col" title="Jul"><div class="seg ent-default" style="height: 4%"></div></div>
+      <div class="month-col" title="Aug"><div class="seg ent-default" style="height: 4%"></div></div>
+      <div class="month-col" title="Sep"><div class="seg ent-default" style="height: 4%"></div></div>
+      <div class="month-col" title="Oct"><div class="seg ent-default" style="height: 4%"></div></div>
+      <div class="month-col" title="Nov"><div class="seg ent-default" style="height: 4%"></div></div>
+      <div class="month-col" title="Dec"><div class="seg ent-default" style="height: 4%"></div></div>
+    </div>
+    <div class="month-axis">
+      <span>Jan</span><span>Feb</span><span>Mar</span><span>Apr</span><span>May</span><span>Jun</span><span>Jul</span><span>Aug</span><span>Sep</span><span>Oct</span><span>Nov</span><span>Dec</span>
+    </div>
+    <p style="margin: 18px 0 0; font-size: 0.74rem; color: var(--muted);">
+      Iran's red runs continuously across the year — the visual "this is in the news every month" pattern. Months without samples (Jun-Dec future) show a tiny default-grey baseline. Real chart would have hundreds of entities stacked; we'd render only the top-N per cell or fade the long tail.
+    </p>
+  </div>
+</div>
+
+<h2>Variant E — zoom levels (mechanic only)</h2>
+<div class="variant">
+  <div class="variant-header">
+    <span class="variant-label">E</span>
+    <span class="variant-name">What scroll/zoom feels like</span>
+    <span class="variant-desc">— five levels, each is a different layout</span>
+  </div>
+  <div class="variant-body">
+    <div class="zoom-levels">
+      <div class="zoom-card">
+        <h4>Hour</h4>
+        <p>Single event, full Wikipedia paragraph + image + links. The summary view.</p>
+      </div>
+      <div class="zoom-card">
+        <h4>Day</h4>
+        <p>Brick layout (Variant C). 8-20 events, weighted by spike score.</p>
+      </div>
+      <div class="zoom-card">
+        <h4>Week</h4>
+        <p>Vertical timeline (Variant B). One day-row, top 3-5 events per day.</p>
+      </div>
+      <div class="zoom-card">
+        <h4>Month</h4>
+        <p>Density grid: 28-31 columns of days, top entities stacked by colour. Click any cell → day.</p>
+      </div>
+      <div class="zoom-card">
+        <h4>Year</h4>
+        <p>Year strip (Variant D). One bar per entity per month, height = activity.</p>
+      </div>
+    </div>
+    <p style="margin: 16px 0 0; font-size: 0.74rem; color: var(--muted);">
+      Mouse-wheel or pinch-zoom transitions between adjacent levels. Each level's "click" zooms in one step. Browser back/forward maps to zoom history. URL is stable per level: <code>/news</code>, <code>/news/2026-05-25</code>, <code>/news/2026-W21</code>, etc.
+    </p>
+  </div>
+</div>
+
+<hr class="section">
+
+<div style="max-width: 700px; margin: 0 auto; font-size: 0.84rem; line-height: 1.55; color: var(--text);">
+  <h2 style="margin: 0 0 8px; font-size: 1rem; color: var(--text);">Strategic positioning</h2>
+  <p>The product positioning question is upstream of the layout. Four options on the spectrum:</p>
+  <ol>
+    <li><b>Search engine with a news rail</b> — today. Search owns the page.</li>
+    <li><b>Search engine with a big news strip</b> — Variant A. Search still owns the homepage; news is now twice the size.</li>
+    <li><b>News + search</b> — Variants B / C. Equal weight. Homepage is "today's events"; search is one keystroke away. <em>Recommendation if we ship this.</em></li>
+    <li><b>News with search hidden</b> — Variants B / C with the toolbar collapsing to an icon. Repositions the product. Search becomes a power-user feature. Higher reward, higher risk.</li>
+  </ol>
+  <p>The brand promise to articulate: <em>"the news, as Wikipedia tells it"</em> — slower than newspapers, neutralised by the editing process, dated and sourced. Not breaking news; news with a week of perspective.</p>
+</div>
+
+</body>
+</html>
