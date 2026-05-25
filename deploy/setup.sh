@@ -769,7 +769,8 @@ decided trending-timer "always rsync"
 for unit in zettair-trending.service zettair-trending.timer \
             zettair-trending-compact.service zettair-trending-compact.timer \
             zettair-news-summary-producer.service zettair-news-summary-producer.timer \
-            zettair-news-compact.service zettair-news-compact.timer; do
+            zettair-news-compact.service zettair-news-compact.timer \
+            zettair-events-index.service zettair-events-index.timer; do
     if [ -f "$SEARCH_DIR/deploy/$unit" ]; then
         dry cp "$SEARCH_DIR/deploy/$unit" /etc/systemd/system/
     fi
@@ -819,6 +820,10 @@ if [ -f /etc/systemd/system/zettair-news-summary-producer.timer ]; then
 fi
 if [ -f /etc/systemd/system/zettair-news-compact.timer ]; then
     dry systemctl enable --now zettair-news-compact.timer
+fi
+# PRD-029 events-index timer
+if [ -f /etc/systemd/system/zettair-events-index.timer ]; then
+    dry systemctl enable --now zettair-events-index.timer
 fi
 
 ### ── 17. Verify ownership (loud failure if anything is misowned) ───────────

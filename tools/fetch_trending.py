@@ -54,6 +54,10 @@ TRENDING_DIR = Path(os.environ.get(
 ))
 HISTORY_PATH = TRENDING_DIR / "history.jsonl"
 CURRENT_PATH = TRENDING_DIR / "current.json"
+# PRD-029: append-only journal of every (docno, event_date, paragraph)
+# tuple we've seen. current.json is overwritten on every fetch, so it's
+# the only place where the rich event data persists across cycles.
+EVENTS_JOURNAL_PATH = TRENDING_DIR / "events.jsonl"
 LOG_PATH     = TRENDING_DIR / "fetch.log"
 
 DENYLIST_PATH = Path(os.environ.get(
@@ -584,6 +588,106 @@ def write_current(payload: dict) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(payload, f, separators=(",", ":"), sort_keys=False)
     os.replace(tmp, CURRENT_PATH)
+
+
+def journal_events(items: list[dict], captured_at: dt.datetime | None = None) -> int:
+    """PRD-029: append-only journal of every event paragraph we've seen.
+
+    current.json is overwritten on every fetch and only carries the
+    final RAIL_MAX-capped, source-weighted list — so the rich event
+    data is otherwise unrecoverable. Journal everything that survived
+    the quality filter, before the cap, so the downstream timeline
+    builder sees the full picture.
+
+    De-dupe at write time: skip an item whose (docno, event_date,
+    event_paragraph) tuple is already at the tail of the journal.
+    Wikipedia paragraphs change occasionally; when they do, the new
+    paragraph appears as a new record alongside the older one and the
+    timeline builder picks the latest by captured_at.
+
+    Returns the number of records actually written.
+    """
+    if not items:
+        return 0
+    EVENTS_JOURNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    captured_at = captured_at or dt.datetime.now(dt.UTC)
+    t_iso = captured_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Build a small set of recently-journaled (docno, event_date, hash)
+    # tuples so we don't re-write the same paragraph every hour. Reading
+    # the last ~64 KB of the journal covers the past day or two.
+    seen: set[tuple[str, str, str]] = set()
+    if EVENTS_JOURNAL_PATH.exists():
+        try:
+            with open(EVENTS_JOURNAL_PATH, "rb") as f:
+                seeked = False
+                try:
+                    f.seek(-65536, os.SEEK_END)
+                    seeked = True
+                except OSError:
+                    f.seek(0)
+                tail = f.read().decode("utf-8", errors="replace")
+            lines = tail.split("\n")
+            # If we seeked into the middle of the file, the first line
+            # may be a partial fragment; skip it. If the seek hit
+            # byte 0 (small file), the first line is whole.
+            if seeked and len(lines) > 1:
+                lines = lines[1:]
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                docno = r.get("docno") or ""
+                ev_d  = r.get("event_date") or ""
+                ev_h  = r.get("event_paragraph_hash") or ""
+                seen.add((docno, ev_d, ev_h))
+        except OSError:
+            pass
+
+    written = 0
+    with open(EVENTS_JOURNAL_PATH, "a", encoding="utf-8") as f:
+        for it in items:
+            para = it.get("event_paragraph")
+            if not para:
+                continue
+            docno = it.get("docno") or (it.get("title") or "").replace(" ", "_")
+            if not docno:
+                continue
+            ev_date = it.get("event_date") or ""
+            ev_hash = _short_hash(para)
+            if (docno, ev_date, ev_hash) in seen:
+                continue
+            rec = {
+                "t": t_iso,
+                "docno": docno,
+                "title": it.get("title") or docno.replace("_", " "),
+                "event_date": ev_date,
+                "event_paragraph": para,
+                "event_paragraph_hash": ev_hash,
+                "event_source": it.get("event_source"),    # wikipedia | news_rss
+                "trending_source": it.get("source"),        # google_news | spike | wiki_itn
+                "source_rank": it.get("source_rank"),
+            }
+            # Optional: top_headline only present when news_rss fallback fired.
+            top = it.get("top_headline")
+            if top:
+                rec["top_headline"] = top
+            f.write(json.dumps(rec, separators=(",", ":"), ensure_ascii=False) + "\n")
+            seen.add((docno, ev_date, ev_hash))
+            written += 1
+    return written
+
+
+def _short_hash(s: str) -> str:
+    """8-char hex content fingerprint for dedupe. Not cryptographic;
+    collisions for short paragraphs are tolerated because the
+    (docno, event_date) prefix already narrows the space."""
+    import hashlib
+    return hashlib.blake2b(s.encode("utf-8", errors="replace"), digest_size=4).hexdigest()
 
 
 RECENTLY_SEEN_PATH = TRENDING_DIR / "recently_seen.json"
@@ -1425,6 +1529,17 @@ def recompute_and_write() -> None:
         f"stale_news={n_stale_news} non_mainstream={n_non_mainstream} "
         f"no_headlines={n_no_headlines}"
     )
+
+    # PRD-029: journal every event paragraph that survived the quality
+    # filter, BEFORE the RAIL_MAX cap. The trending rail only needs the
+    # top dozen; the timeline cares about all the documented events.
+    try:
+        n_journaled = journal_events(quality_kept)
+        if n_journaled:
+            log(f"events journal: appended {n_journaled} new records to {EVENTS_JOURNAL_PATH}")
+    except Exception as e:
+        # Journal failures must not break the trending pipeline.
+        log(f"events journal: failed to write ({type(e).__name__}: {e})")
 
     # Source-weighted sort: google_news → spike → wiki_itn within each
     # source by source_rank. Then cap at RAIL_MAX.
