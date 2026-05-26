@@ -166,6 +166,7 @@ def build(journal_path: Path,
           categories_path: Path | None = None,
           summaries_store: Path | None = None,
           summaries_map: Path | None = None,
+          day_summaries_journal: Path | None = None,
           today: dt.date | None = None,
           horizon_days: int = 90,
           class_weights: dict[str, float] | None = None) -> None:
@@ -347,9 +348,36 @@ def build(journal_path: Path,
             end = f.tell()
             date_index[ev_date] = [start, end - start]
 
+    # PRD-029 day-summaries: read the snapshot journal and keep the
+    # latest record per event_date. Emitted inline in the idx (small —
+    # ~150 bytes per day, capped at a few months of horizon).
+    day_summaries: dict[str, str] = {}
+    if day_summaries_journal and day_summaries_journal.exists():
+        print(f"loading day-summaries journal: {day_summaries_journal}", flush=True)
+        latest_t: dict[str, str] = {}
+        with open(day_summaries_journal, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                ed = r.get("event_date")
+                t  = r.get("t", "")
+                body = r.get("summary_md")
+                if not ed or not body:
+                    continue
+                if t >= latest_t.get(ed, ""):
+                    latest_t[ed] = t
+                    day_summaries[ed] = body
+        print(f"  {len(day_summaries):,} day summaries archived", flush=True)
+
     idx_payload = {
-        "version": 1,
+        "version": 2,
         "event_date_index": date_index,
+        "day_summaries": day_summaries,
         "total_events": len(fresh),
         "horizon_days": horizon_days,
         "built_at": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -387,6 +415,10 @@ def main() -> int:
                         "fine (events render without summary_md).")
     p.add_argument("--summaries-map", type=Path,
                    default=DEFAULT_VOLUME / "summaries.map")
+    p.add_argument("--day-summaries", type=Path,
+                   default=DEFAULT_TRENDING_DIR / "day_summaries.jsonl",
+                   help="PRD-029 day-roundup snapshot journal; missing is "
+                        "fine (no roundup served until snapshotted).")
     p.add_argument("--out-dir", type=Path,
                    default=DEFAULT_TRENDING_DIR)
     p.add_argument("--horizon-days", type=int, default=90,
@@ -405,6 +437,7 @@ def main() -> int:
           categories_path=args.categories,
           summaries_store=args.summaries_store,
           summaries_map=args.summaries_map,
+          day_summaries_journal=args.day_summaries,
           horizon_days=args.horizon_days)
     return 0
 
