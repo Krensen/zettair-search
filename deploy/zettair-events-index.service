@@ -7,7 +7,11 @@ Wants=network-online.target
 Type=oneshot
 User=zettair
 WorkingDirectory=/opt/zettair-search
-# PRD-029 step 2: classify events first so the index build can join.
+# PRD-029 step 2a: fetch any missing Wikipedia categories for new
+# entities. Incremental + idempotent — hits the API only for docnos
+# not yet in the cache.
+ExecStartPre=/usr/bin/python3 -u /opt/zettair-search/tools/fetch_wikipedia_categories.py
+# PRD-029 step 2b: classify events using the wiki-cats sidecar.
 ExecStartPre=/usr/bin/python3 -u /opt/zettair-search/tools/build_event_categories.py
 # Main: build the events.jsonl + events.idx (now with categories joined).
 ExecStart=/usr/bin/python3 -u /opt/zettair-search/tools/build_events_index.py

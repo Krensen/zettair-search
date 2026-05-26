@@ -35,8 +35,25 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import sys
+import urllib.parse
 from pathlib import Path
+
+
+# Inline mirror of fetch_trending.title_to_query — kept here to avoid
+# importing the whole trending module. Must stay in sync.
+_DISAMB_PAREN = re.compile(r"_\([^()]+\)$")
+_TRAILING_PUNCT = re.compile(r"[\.,!?]+$")
+
+
+def _query_norm_from_docno(docno: str) -> str:
+    t = _DISAMB_PAREN.sub("", docno)
+    t = t.replace("_", " ")
+    t = urllib.parse.unquote(t)
+    t = _TRAILING_PUNCT.sub("", t)
+    t = " ".join(t.split())
+    return t.lower()
 
 DEFAULT_TRENDING_DIR = Path(os.environ.get(
     "ZET_TRENDING_DIR", "/mnt/wikipedia-source/trending",
@@ -209,21 +226,41 @@ def build(journal_path: Path,
         except (OSError, json.JSONDecodeError) as e:
             print(f"  WARN: couldn't load categories: {e}", flush=True)
 
-    # PRD-029 step 3: LLM event-summary join, if the summaries
-    # FlatStore is present and has any <docno>:<event_date>:event keys.
+    # PRD-029 step 3: LLM summary join. Two key shapes considered:
+    #   1. <docno>:<event_date>:event  — purpose-built per-event
+    #      summary (only present if we explicitly enqueued one).
+    #   2. <query_norm>:news            — the PRD-021 search-panel
+    #      summary; reused on the timeline when the event is recent
+    #      enough that it's plausibly the same incident, so the
+    #      timeline and the search knowledge-panel agree on the text.
+    # NEWS_REUSE_DAYS bounds the reuse window so a March IAEA summary
+    # does not get attached to a January Iran event.
+    NEWS_REUSE_DAYS = 14
+    today_iso = today.isoformat() if today else dt.date.today().isoformat()
+    news_floor_iso = (dt.date.fromisoformat(today_iso) -
+                      dt.timedelta(days=NEWS_REUSE_DAYS)).isoformat()
+
     summaries = None
-    sum_keys: set[str] = set()
+    event_keys: set[str] = set()
+    news_keys: set[str] = set()
     if summaries_store and summaries_map and summaries_store.exists() and summaries_map.exists():
         print(f"loading summaries store: {summaries_store}", flush=True)
         summaries = FlatStoreRO(summaries_store, summaries_map)
         if summaries.load():
-            sum_keys = {k for k in summaries._map.keys() if k.endswith(":event")}
-            print(f"  {len(sum_keys):,} event-summary keys", flush=True)
+            for k in summaries._map.keys():
+                if k.endswith(":event"):
+                    event_keys.add(k)
+                elif k.endswith(":news"):
+                    news_keys.add(k)
+            print(f"  {len(event_keys):,} event-summary keys, "
+                  f"{len(news_keys):,} :news-summary keys",
+                  flush=True)
         else:
             summaries = None
 
     # Enrich each record.
-    n_with_summary = 0
+    n_with_event_summary = 0
+    n_with_news_summary  = 0
     for r in fresh:
         docno = r["docno"]
         if images_ok:
@@ -237,16 +274,34 @@ def build(journal_path: Path,
         if cat:
             r["category"] = cat
         if summaries is not None:
-            key = f"{docno}:{r.get('event_date', '')}:event"
-            if key in sum_keys:
-                body = summaries.get(key)
+            ev_date = r.get("event_date", "")
+            # Primary: per-event summary.
+            ek = f"{docno}:{ev_date}:event"
+            body = None
+            if ek in event_keys:
+                body = summaries.get(ek)
                 if body:
                     r["summary_md"] = body
-                    n_with_summary += 1
+                    r["summary_source"] = "event"
+                    n_with_event_summary += 1
+            # Fallback: PRD-021 :news summary, only for events within
+            # NEWS_REUSE_DAYS of today (so it is plausibly the same
+            # incident the search panel is showing).
+            if body is None and ev_date >= news_floor_iso:
+                qn = _query_norm_from_docno(docno)
+                nk = f"{qn}:news"
+                if nk in news_keys:
+                    body = summaries.get(nk)
+                    if body:
+                        r["summary_md"] = body
+                        r["summary_source"] = "news"
+                        n_with_news_summary += 1
         r["rank_hint"] = round(compute_rank_hint(r, class_weights), 4)
     if summaries is not None:
         summaries.close()
-        print(f"  joined LLM summary onto {n_with_summary:,} events", flush=True)
+        print(f"  joined LLM summary onto {n_with_event_summary:,} events "
+              f"(:event) + {n_with_news_summary:,} (:news reused)",
+              flush=True)
 
     images.close()
 
