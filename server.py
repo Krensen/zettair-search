@@ -1197,6 +1197,17 @@ async def api_events(
     if (end_d - start_d).days > 90:
         start_d = end_d - datetime.timedelta(days=90)
     events = _events_in_range(start_d, end_d, per_day)
+    # Per-date day-roundup map, scoped to the requested range. Renders
+    # inline above each day-row in the week view; small payload
+    # (at most ~90 entries, ~150 bytes each).
+    all_day_summaries = _events_idx.get("day_summaries") or {}
+    day_summaries: dict[str, str] = {}
+    d = start_d
+    while d <= end_d:
+        body = all_day_summaries.get(d.isoformat())
+        if body:
+            day_summaries[d.isoformat()] = body
+        d += datetime.timedelta(days=1)
     return {
         "from": start_d.isoformat(),
         "to": end_d.isoformat(),
@@ -1209,6 +1220,7 @@ async def api_events(
             for e in events
             if e.get("docno") in _entity_colors
         },
+        "day_summaries": day_summaries,
         "built_at": _events_idx.get("built_at"),
     }
 
@@ -1384,10 +1396,18 @@ async def news_day_page(ev_date: str):
     return html
 
 
+def _day_summary_for(ev_date: str) -> str | None:
+    """Return the archived <date>:day roundup body or None.
+    Source: events.idx's day_summaries block, populated by the
+    snapshot pipeline."""
+    return (_events_idx.get("day_summaries") or {}).get(ev_date)
+
+
 @app.get("/api/events/day/{ev_date}")
 async def api_events_day(ev_date: str):
     """Single-day convenience: returns every event for the date,
-    no per-day cap, already sorted by rank_hint desc."""
+    no per-day cap, already sorted by rank_hint desc. Includes the
+    archived day-roundup summary when one has been generated."""
     try:
         datetime.date.fromisoformat(ev_date)
     except ValueError:
@@ -1402,6 +1422,7 @@ async def api_events_day(ev_date: str):
             for e in events
             if e.get("docno") in _entity_colors
         },
+        "day_summary_md": _day_summary_for(ev_date),
         "built_at": _events_idx.get("built_at"),
     }
 

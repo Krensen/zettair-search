@@ -355,6 +355,35 @@
     color: var(--muted);
     margin-left: 12px;
   }
+  /* "What happened today" LLM-generated day-roundup summary. */
+  .day-summary {
+    background: var(--surface);
+    border-left: 4px solid var(--accent);
+    border-radius: 6px;
+    padding: 14px 18px 16px;
+    margin: 8px 0 22px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    font-size: 1rem;
+    line-height: 1.55;
+    color: var(--text);
+  }
+  .day-summary p { margin: 0 0 8px; }
+  .day-summary p:last-child { margin-bottom: 0; }
+  .day-summary ul { margin: 0 0 8px; padding-left: 20px; }
+  .day-summary li { margin: 0 0 4px; }
+  .day-summary strong { color: var(--accent); }
+  /* Week view variant — smaller, slot above the per-day card grid. */
+  .day-summary-compact {
+    font-size: 0.88rem;
+    padding: 8px 14px 10px;
+    margin: 2px 0 12px;
+    border-left-width: 3px;
+    background: linear-gradient(to right, var(--accent-bg) 0%, transparent 80%);
+    box-shadow: none;
+  }
+  .day-summary-compact p { margin: 0 0 4px; }
+  .day-summary-compact ul { margin: 0 0 4px; padding-left: 18px; }
+
   /* Category section heading inside a day. */
   .category-section { margin-top: 22px; }
   .category-section:first-child { margin-top: 0; }
@@ -928,12 +957,18 @@
           </div>
         </a>`;
       }).join('');
+      // Per-day roundup, if archived. Compact rendering above the cards.
+      const daySummaryMd = (payload.day_summaries || {})[date] || '';
+      const daySummaryHtml = daySummaryMd
+        ? `<div class="day-summary day-summary-compact">${renderMarkdown(daySummaryMd)}</div>`
+        : '';
       // Clicking the date label drills into the day-detail view.
       parts.push(`<section class="day">
         <a class="day-label is-link" href="/news/${esc(date)}" title="View all events for ${esc(date)}"
            style="text-decoration:none;">
            <span class="num">${esc(num)}</span><span class="dow">${esc(dow)}</span>
         </a>
+        ${daySummaryHtml}
         <div class="cards">${cards}</div>
       </section>`);
     }
@@ -1053,6 +1088,12 @@
       sectionsHtml = `<div class="bricks">${flat}</div>`;
     }
 
+    // Day-roundup summary (LLM "what happened today"), if archived.
+    const daySummaryMd = payload.day_summary_md || '';
+    const daySummaryHtml = daySummaryMd
+      ? `<div class="day-summary">${renderMarkdown(daySummaryMd)}</div>`
+      : '';
+
     content.innerHTML = `
       <div class="day-detail">
         <div class="day-nav">
@@ -1064,6 +1105,7 @@
           ${esc(formatFullDate(date))}
           <span class="small">${events.length} events from Wikipedia</span>
         </h2>
+        ${daySummaryHtml}
         <div id="eventDetail"></div>
         <div id="bricks">${sectionsHtml}</div>
       </div>`;

@@ -13,10 +13,18 @@ WorkingDirectory=/opt/zettair-search
 ExecStartPre=/usr/bin/python3 -u /opt/zettair-search/tools/fetch_wikipedia_categories.py
 # PRD-029 step 2b: classify events using the wiki-cats sidecar.
 ExecStartPre=/usr/bin/python3 -u /opt/zettair-search/tools/build_event_categories.py
-# Main: build the events.jsonl + events.idx (now with categories joined).
+# PRD-029 day-roundup snapshot: capture the current state of any
+# <date>:day entries in summaries.store into an append-only journal,
+# so the rendered timeline does not drift when the LLM regenerates.
+ExecStartPre=/usr/bin/python3 -u /opt/zettair-search/tools/snapshot_day_summaries.py
+# Main: build the events.jsonl + events.idx (categories + day-roundup
+# summaries joined into the idx).
 ExecStart=/usr/bin/python3 -u /opt/zettair-search/tools/build_events_index.py
-# Then refresh entity-colour assignments based on the latest journal.
+# Refresh entity-colour assignments based on the latest journal.
 ExecStartPost=/usr/bin/python3 -u /opt/zettair-search/tools/build_entity_colors.py
+# Enqueue any missing day-roundup summary jobs (depends on Mac Mini
+# supporting the day-roundup prompt mode; harmless to enqueue early).
+ExecStartPost=/usr/bin/python3 -u /opt/zettair-search/tools/build_day_summary_jobs.py
 StandardOutput=journal
 StandardError=journal
 
