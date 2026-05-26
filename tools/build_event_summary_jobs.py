@@ -29,8 +29,26 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import sys
+import urllib.parse
 from pathlib import Path
+
+# Mirror of fetch_trending.title_to_query (kept inline so this script
+# does not import the whole trending module). Used to derive a
+# query_norm from a docno so we can check whether a <query_norm>:news
+# summary already exists in summaries.map.
+_DISAMB_PAREN = re.compile(r"_\([^()]+\)$")
+_TRAILING_PUNCT = re.compile(r"[\.,!?]+$")
+
+
+def _query_norm_from_docno(docno: str) -> str:
+    t = _DISAMB_PAREN.sub("", docno)
+    t = t.replace("_", " ")
+    t = urllib.parse.unquote(t)
+    t = _TRAILING_PUNCT.sub("", t)
+    t = " ".join(t.split())
+    return t.lower()
 
 
 DEFAULT_TRENDING_DIR = Path(os.environ.get(
@@ -128,6 +146,12 @@ def main() -> int:
     p.add_argument("--require-paragraph", action="store_true",
                    help="skip events with no event_paragraph (recommended; "
                         "the LLM has nothing to summarise from a bare title)")
+    p.add_argument("--news-reuse-days", type=int, default=14,
+                   help="Skip enqueueing when a <query_norm>:news summary "
+                        "already exists in summaries.map AND the event_date "
+                        "is within this many days of today. Avoids generating "
+                        "a parallel :event summary for the same incident "
+                        "the search panel is already summarising.")
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args()
 
@@ -137,6 +161,9 @@ def main() -> int:
 
     smap = load_summaries_map(args.summaries_map)
     log(f"summaries.map has {len(smap):,} existing entries")
+    today_iso = dt.datetime.now(dt.UTC).date().isoformat()
+    news_floor_iso = (dt.datetime.now(dt.UTC).date()
+                      - dt.timedelta(days=args.news_reuse_days)).isoformat()
 
     # Walk the journal and dedupe to one record per (docno, event_date)
     # keeping the latest captured `t`.
@@ -154,7 +181,8 @@ def main() -> int:
     log(f"journal has {len(latest):,} unique (docno, event_date) pairs")
 
     stats = {"queued": 0, "in_map": 0, "in_pipeline": 0,
-             "no_paragraph": 0, "scanned": len(latest)}
+             "news_reused": 0, "no_paragraph": 0,
+             "scanned": len(latest)}
     for key, rec in latest.items():
         if stats["queued"] >= args.max_enqueue:
             log(f"hit --max-enqueue cap ({args.max_enqueue}); stopping")
@@ -162,6 +190,16 @@ def main() -> int:
         if key in smap:
             stats["in_map"] += 1
             continue
+        docno  = rec.get("docno", "")
+        ev_date = rec.get("event_date", "")
+        # If a PRD-021 :news summary already exists for this entity
+        # AND the event is recent, the events-index will fall back to
+        # it at join time. No need to generate a parallel :event.
+        if ev_date >= news_floor_iso:
+            qn = _query_norm_from_docno(docno)
+            if f"{qn}:news" in smap:
+                stats["news_reused"] += 1
+                continue
         if args.require_paragraph and not rec.get("event_paragraph"):
             stats["no_paragraph"] += 1
             continue

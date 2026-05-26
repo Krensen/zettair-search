@@ -1,30 +1,26 @@
 #!/usr/bin/env python3
 """PRD-029: classify events into a small fixed taxonomy.
 
-Heuristic-only v1. Walks the trending journal, picks a category for
-every (docno, event_date), and writes a flat sidecar file:
+v2 (Wikipedia-categories driven). For every (docno, event_date) in
+the events journal, look up the docno in
+trending/wikipedia_categories.json, score each of the article's
+Wikipedia categories against the bucket rules, and pick the bucket
+with the most votes. Paragraph-text heuristics remain as a low-
+confidence fallback for entities the categories miss.
+
+Output sidecar (unchanged shape, consumed by build_events_index):
 
     trending/events.categories.json
     {
-      "version": 1,
-      "categories": {
-        "Iran:2026-05-25":      "world",
-        "OpenAI:2026-05-25":    "tech",
-        ...
-      },
+      "version": 2,
+      "categories": { "Iran:2026-05-25": "world", ... },
+      "counts":     { "world": 47, ... },
+      "method_counts": { "wiki": 412, "paragraph": 38, "entity_class": 12, "fallback": 5 },
       "built_at": "..."
     }
 
-The events-index builder reads this and joins the category onto each
-event record. Frontend groups within a day by category.
-
-Taxonomy (fixed, 8 buckets):
-    politics, business, tech, sport, science, culture, world, other
-
-This is intentionally cheap. ~70% of events will land in a reasonable
-bucket; the rest fall to "other". A future v2 could replace the
-regex matchers with LLM classification — the file format is stable
-either way.
+Taxonomy (unchanged): politics, business, tech, sport, science,
+culture, world, other.
 """
 
 from __future__ import annotations
@@ -35,7 +31,7 @@ import json
 import os
 import re
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 DEFAULT_TRENDING_DIR = Path(os.environ.get(
@@ -46,177 +42,285 @@ CATEGORIES = ("politics", "business", "tech", "sport",
               "science", "culture", "world", "other")
 
 
-# Order matters: first matching rule wins. Each rule is (category,
-# entity_substring_re_or_None, paragraph_substring_re_or_None).
-# Empty/None means "do not require that signal."
-def _rx(pattern: str) -> re.Pattern:
-    return re.compile(pattern, re.IGNORECASE)
+# ---------------------------------------------------------------------------
+# Wikipedia-category -> bucket rules
+#
+# A bucket "wins" a category iff ANY of its substring patterns matches.
+# Order in the dict is iteration order; we accumulate votes across an
+# entity's full category list and pick the highest-voted bucket. The
+# weight is multiplicative — high-signal categories vote 2, generic
+# ones vote 1.
+# ---------------------------------------------------------------------------
 
-
-# Known-entity allowlists (low false-positive rate; checked first).
-TECH_ENTITIES = {
-    "openai", "anthropic", "google", "alphabet", "apple", "apple_inc",
-    "microsoft", "meta_platforms", "amazon", "tesla", "nvidia",
-    "spacex", "starlink", "x_corp", "tiktok", "youtube", "github",
-    "stripe", "shopify", "uber", "airbnb", "linkedin", "reddit",
-    "instagram", "facebook", "whatsapp", "deepmind", "stability_ai",
-    "anduril", "perplexity_ai", "mistral_ai", "hugging_face",
-    "sam_altman", "elon_musk", "tim_cook", "mark_zuckerberg",
-    "sundar_pichai", "satya_nadella", "jeff_bezos",
+BUCKET_PATTERNS: dict[str, list[tuple[str, int]]] = {
+    "sport": [
+        ("football", 2), ("footballer", 2), ("association football", 2),
+        ("cricket", 2), ("cricketer", 2), ("rugby", 2), ("baseball", 2),
+        ("basketball", 2), ("tennis", 2), ("tennis player", 2),
+        ("golf", 2), ("golfer", 2), ("boxer", 2), ("boxing", 2),
+        ("athletics", 2), ("athletes", 2), ("athlete", 2),
+        ("ice hockey", 2), ("hockey players", 2),
+        ("formula one", 2), ("nascar", 2), ("motorsport", 2),
+        ("olympic", 2), ("world cup", 2), ("grand prix", 1),
+        ("sports", 1), ("sport teams", 2),
+        ("managers in", 2), ("coaches of", 2), ("league", 1),
+        ("championship", 1), ("tournament", 1), ("athletics players", 2),
+        ("wrestlers", 2), ("wrestling", 2), ("mma", 2),
+        ("mixed martial", 2), ("sumo", 2),
+        ("swimmers", 2), ("cyclists", 2), ("snowboarders", 2),
+        ("skiers", 2), ("formula", 1),
+    ],
+    "politics": [
+        ("politicians", 2), ("politician", 2),
+        ("political party", 2), ("political parties", 2),
+        ("members of parliament", 2), ("members of the senate", 2),
+        ("united states senators", 2), ("united states representatives", 2),
+        ("ministers of", 2), ("prime ministers", 2),
+        ("presidents of", 2), ("vice presidents of", 2),
+        ("governors of", 2), ("mayors of", 2),
+        ("ambassadors", 2), ("diplomats", 2),
+        ("political movements", 2), ("political activists", 2),
+        ("political parties established", 2),
+        ("cabinet members", 2), ("government officials", 2),
+        ("political scandals", 1),
+        ("elections", 1), ("election", 1), ("presidential elections", 2),
+        ("political philosophers", 2),
+    ],
+    "business": [
+        ("companies", 1), ("companies based", 1),
+        ("companies of", 1), ("companies established", 1),
+        ("multinational companies", 2),
+        ("publicly traded companies", 2),
+        ("banks of", 2), ("banks established", 2),
+        ("financial services companies", 2),
+        ("retail companies", 2), ("supermarket chains", 2),
+        ("manufacturing companies", 2),
+        ("airline", 2), ("airlines of", 2),
+        ("automotive companies", 2),
+        ("brands", 1), ("american brands", 1),
+        ("ipos", 2), ("initial public offerings", 2),
+        ("billionaires", 2), ("chief executives", 2),
+        ("entrepreneurs", 2), ("business executives", 2),
+        ("dow jones", 2), ("s&p 500", 2),
+    ],
+    "tech": [
+        ("software companies", 2),
+        ("internet companies", 2),
+        ("social media", 2), ("social networking", 2),
+        ("technology companies", 2),
+        ("semiconductor companies", 2),
+        ("computer hardware", 2), ("computer companies", 2),
+        ("video game", 1), ("video game companies", 2),
+        ("artificial intelligence", 2),
+        ("machine learning", 2),
+        ("electronics companies", 2),
+        ("e-commerce", 2),
+        ("smartphone", 2),
+        ("operating systems", 2),
+        ("programming languages", 2),
+        ("websites", 1), ("web browsers", 2),
+        ("software engineers", 2), ("computer scientists", 2),
+        ("cryptocurrencies", 2), ("bitcoin", 2),
+    ],
+    "science": [
+        ("scientists", 2), ("biologists", 2), ("physicists", 2),
+        ("chemists", 2), ("astronomers", 2), ("mathematicians", 2),
+        ("entomologists", 2), ("microbiologists", 2),
+        ("zoologists", 2), ("botanists", 2), ("geologists", 2),
+        ("anthropologists", 2), ("archaeologists", 2),
+        ("psychologists", 2), ("economists", 2),
+        ("engineers", 1), ("inventors", 2),
+        ("nobel laureates in", 2),
+        ("medical researchers", 2),
+        ("infectious diseases", 2), ("epidemics", 2), ("pandemics", 2),
+        ("vaccines", 2), ("viruses", 2), ("virology", 2),
+        ("public health", 2), ("medical organizations", 1),
+        ("astronomy", 1), ("astronomical objects", 2),
+        ("spaceflight", 2), ("planets", 2), ("exoplanets", 2),
+        ("biology", 1), ("chemistry", 1), ("physics", 1),
+        ("mathematics", 1),
+        ("monoterpenes", 2), ("hydrocarbon", 2),   # chemistry stubs
+        ("molecules", 2), ("compounds", 1),
+        ("ecology", 1), ("paleontology", 2), ("fossils", 2),
+        ("species", 2),
+    ],
+    "culture": [
+        ("films", 2), ("film directors", 2), ("film actors", 2),
+        ("actors", 2), ("actresses", 2),
+        ("singers", 2), ("songwriters", 2), ("musicians", 2),
+        ("rappers", 2), ("rock musicians", 2),
+        ("pop musicians", 2), ("country musicians", 2),
+        ("albums", 1), ("songs", 1), ("singles", 1),
+        ("television series", 2), ("tv series", 2),
+        ("television actors", 2), ("television presenters", 2),
+        ("comedians", 2), ("authors", 2), ("novelists", 2),
+        ("poets", 2), ("books", 1), ("novels", 1),
+        ("video games", 1),   # tech-tagged above; culture wins on ties
+        ("art exhibitions", 2), ("artists", 2),
+        ("musical groups", 2), ("rock bands", 2),
+        ("hip hop", 2),
+        ("opera", 2), ("ballet", 2),
+        ("anime", 2), ("manga", 2),
+        ("internet memes", 2),
+    ],
+    "world": [
+        ("countries", 1), ("states of", 1), ("cities in", 1),
+        ("capitals", 1),
+        ("wars", 2), ("battles", 2), ("conflicts", 2),
+        ("massacres", 2), ("genocides", 2),
+        ("terrorist attacks", 2), ("terror attacks", 2),
+        ("natural disasters", 2), ("earthquakes", 2),
+        ("hurricanes", 2), ("cyclones", 2),
+        ("airstrikes", 2), ("bombings", 2),
+        ("uprisings", 2), ("revolutions", 2),
+        ("disasters in", 2), ("protests", 2),
+        ("refugee", 2), ("crises in", 2),
+        ("federal holidays", 1), ("national holidays", 1),
+        ("public holidays", 1), ("observances", 1),
+        ("murders", 2), ("homicides", 2), ("crimes", 1),
+        ("kidnappings", 2),
+    ],
 }
-SPORT_PARAGRAPH_HINTS = _rx(
-    r"\b(match|league|championship|championships|tournament|season|"
-    r"goal|goals|knockout|wicket|wickets|innings|playoff|playoffs|"
-    r"olympic|world\s+cup|grand\s+slam|grand\s+prix|relegation|"
-    r"runs?\s+scored|points?\s+scored|coach|manager|captain|striker|"
-    r"defender|midfielder|goalkeeper|quarterback|striker|fielder|"
-    r"world\s+record|gold\s+medal|silver\s+medal|bronze\s+medal|"
-    r"defeated|beat|trailed|qualified|qualifier)\b"
-)
-SPORT_ENTITY_HINTS = _rx(
-    r"(_FC|_F\.C\.|_AFC|_RFC|_United$|_City$|_Rovers$|_Wanderers$|"
-    r"_County$|_Town$|_Athletic$|_Albion$|_Stadium$|"
-    r"_national_football_team|_cricket_team|_rugby|_basketball|"
-    r"NFL|NBA|MLB|NHL|UFC|F1|Formula_One|"
-    r"PGA|LPGA|ATP|WTA|UEFA|FIFA|IPL|IOC|"
-    r"Open$|Championship$|Trophy$|League$)"
-)
-BUSINESS_PARAGRAPH_HINTS = _rx(
-    r"\b(earnings|quarterly\s+results?|share\s+price|shareholders?|"
-    r"acqui[sz]ition|merger|IPO|stock|bonds?|interest\s+rate|"
-    r"central\s+bank|federal\s+reserve|inflation|recession|"
-    r"market\s+cap|valuation|funding\s+round|series\s+[abcd]|"
-    r"CEO|CFO|board\s+of\s+directors|antitrust|"
-    r"layoffs?|hir(e|ing)|fired|profits?|revenue|loss|deficit|"
-    r"trade\s+deal|tariff|sanctions?)\b"
-)
-BUSINESS_ENTITY_HINTS = _rx(
-    r"(_Inc\.?$|_Corporation$|_Corp\.?$|_LLC$|_Ltd\.?$|"
-    r"_Company$|_Holdings$|_Group$|_PLC$|_S\.A\.?$|_AG$)"
-)
-TECH_PARAGRAPH_HINTS = _rx(
-    r"\b(artificial\s+intelligence|large\s+language\s+model|GPT|"
-    r"chatbot|machine\s+learning|neural\s+network|"
-    r"semiconductor|chips?|silicon|datacenter|cloud\s+computing|"
-    r"software|operating\s+system|browser|smartphone|"
-    r"open\s+source|repository|developer|engineer|product\s+launch|"
-    r"data\s+breach|cybersecurity|encryption|VPN|Bitcoin|"
-    r"crypto|blockchain|NFT|ethereum|stablecoin)\b"
-)
-POLITICS_PARAGRAPH_HINTS = _rx(
-    r"\b(elected|election|elections|re-elected|inaugurated|"
-    r"minister|prime\s+minister|chancellor|president|presidency|"
-    r"senate|senator|congress|congressman|congresswoman|"
-    r"parliament|MP|MPs|MEP|MEPs|"
-    r"resigned|sworn\s+in|impeach|impeachment|vote|voted|"
-    r"campaign|candidate|primary|caucus|polls?|"
-    r"governor|mayor|cabinet|coalition|treaty|"
-    r"diplomat|ambassador|foreign\s+minister|secretary\s+of\s+state)\b"
-)
-SCIENCE_PARAGRAPH_HINTS = _rx(
-    r"\b(study\s+published|research(ers?|\s+team)?|scientists?|"
-    r"vaccine|virus|outbreak|epidemic|pandemic|disease|"
-    r"clinical\s+trial|FDA|EMA|WHO|peer-reviewed|"
-    r"genome|DNA|RNA|species|fossil|paleontolog|biology|"
-    r"NASA|ESA|telescope|astronomy|astronomer|asteroid|comet|"
-    r"planet|exoplanet|orbit|launch\s+pad)\b"
-)
-CULTURE_PARAGRAPH_HINTS = _rx(
-    r"\b(album|song|single|track|hit|chart|chart-topping|"
-    r"film|movie|director|screenplay|box\s+office|"
-    r"premiered?|released|sequel|prequel|reboot|spin-off|"
-    r"book|novel|memoir|bestseller|literary|"
-    r"actor|actress|cast|starred|starring|"
-    r"festival|concert|tour|tickets?|theatre|theater|"
-    r"art\s+exhibition|gallery|painting|sculpture|"
-    r"Grammy|Oscar|Emmy|BAFTA|Cannes|Sundance|Tony)\b"
-)
-WORLD_PARAGRAPH_HINTS = _rx(
-    r"\b(killed|deaths?|casualt(y|ies)|wounded|injured|"
-    r"war|warfare|battle|skirmish|airstrike|bombing|missile|"
-    r"ceasefire|truce|peace\s+deal|hostages?|prisoners?|"
-    r"refugees?|migrants?|displaced|evacuation|"
-    r"earthquake|tsunami|flooding?|hurricane|cyclone|typhoon|"
-    r"famine|drought|wildfire|wildfires|"
-    r"genocide|atrocity|coup|protests?|protested|riots?)\b"
-)
+
+# Stop-categories that should NOT vote, even when they substring-match
+# a bucket pattern. These are too generic and would skew classification.
+STOP_CATEGORY_PATTERNS = [
+    "living people",
+    "deaths",
+    "births",
+    "burials at",
+    "establishments in",   # noisy (every company / country / building)
+    "in popular culture",
+]
 
 
-def classify(docno: str, title: str, paragraph: str | None,
-             entity_class: str | None = None) -> str:
-    """Pick the best category for one event. First-match wins; the
-    rule order encodes our priorities. entity_class (from PRD-025)
-    is a low-confidence backstop when no paragraph rule fires."""
-    docno_l = (docno or "").lower()
-    para = paragraph or ""
+def vote_from_wiki_categories(cats: list[str]) -> tuple[str | None, int]:
+    """Score the entity's Wikipedia categories against bucket patterns.
+    Returns (best_bucket_or_None, total_votes_for_best). Ties broken
+    by the bucket order in BUCKET_PATTERNS (insertion order)."""
+    votes: Counter = Counter()
+    for raw in cats:
+        c = raw.lower()
+        if any(s in c for s in STOP_CATEGORY_PATTERNS):
+            continue
+        for bucket, patterns in BUCKET_PATTERNS.items():
+            for pat, weight in patterns:
+                if pat in c:
+                    votes[bucket] += weight
+                    break   # one vote per category per bucket
+    if not votes:
+        return None, 0
+    # Stable tie-break by bucket order (insertion order in CATEGORIES).
+    best = max(votes.items(), key=lambda kv: (kv[1],
+                                              -CATEGORIES.index(kv[0])))
+    return best[0], best[1]
 
-    # High-confidence entity matches first.
-    if docno_l in TECH_ENTITIES:
-        return "tech"
 
-    # Then paragraph + entity heuristics. Order: sport (strong hints,
-    # rarely false-positives) -> tech -> business -> politics ->
-    # science -> culture -> world -> other.
-    if SPORT_ENTITY_HINTS.search(docno or ""):
-        return "sport"
-    if SPORT_PARAGRAPH_HINTS.search(para):
-        return "sport"
+# ---------------------------------------------------------------------------
+# Paragraph-text fallback (low confidence, used when wiki cats miss)
+# ---------------------------------------------------------------------------
 
-    if TECH_PARAGRAPH_HINTS.search(para):
-        return "tech"
+_rx = lambda p: re.compile(p, re.IGNORECASE)
+PARA_RULES = [
+    ("sport",    _rx(r"\b(match|league|championship|tournament|goal|olympic|world\s+cup|grand\s+slam|grand\s+prix|coach|manager|striker|defender|midfielder|defeated|qualifier)\b")),
+    ("business", _rx(r"\b(earnings|quarterly|shares?|acqui[sz]ition|merger|ipo|stock\s+price|ceo|board\s+of\s+directors|layoffs?|profits?|revenue)\b")),
+    ("tech",     _rx(r"\b(ai|artificial\s+intelligence|chatbot|machine\s+learning|gpt|semiconductor|chips?|cloud\s+computing|software|smartphone|open\s+source|cybersecurity|bitcoin|crypto|blockchain|ethereum)\b")),
+    ("politics", _rx(r"\b(elected|election|inaugurated|minister|prime\s+minister|senator|congress|parliament|impeach|cabinet|coalition|sworn\s+in)\b")),
+    ("science",  _rx(r"\b(study|research|scientists|vaccine|virus|disease|outbreak|epidemic|pandemic|clinical\s+trial|NASA|telescope|exoplanet)\b")),
+    ("culture",  _rx(r"\b(album|song|single|film|movie|director|premiered?|tour|concert|festival|novel|memoir|actor|actress|Grammy|Oscar|Emmy|BAFTA)\b")),
+    ("world",    _rx(r"\b(killed|wounded|war|airstrike|missile|ceasefire|refugees?|earthquake|hurricane|cyclone|coup|protests?|riots?|murder)\b")),
+]
 
-    if BUSINESS_ENTITY_HINTS.search(docno or ""):
-        return "business"
-    if BUSINESS_PARAGRAPH_HINTS.search(para):
-        return "business"
 
-    if POLITICS_PARAGRAPH_HINTS.search(para):
-        return "politics"
+def classify_paragraph(paragraph: str | None) -> str | None:
+    if not paragraph:
+        return None
+    for bucket, rx in PARA_RULES:
+        if rx.search(paragraph):
+            return bucket
+    return None
 
-    if SCIENCE_PARAGRAPH_HINTS.search(para):
-        return "science"
 
-    if CULTURE_PARAGRAPH_HINTS.search(para):
-        return "culture"
+# ---------------------------------------------------------------------------
+# Entity-class backstop
+# ---------------------------------------------------------------------------
 
-    if WORLD_PARAGRAPH_HINTS.search(para):
-        return "world"
+CLASS_BACKSTOPS = {
+    "place":        "world",
+    "event":        "world",
+    "organisation": "business",
+    "work":         "culture",
+    # "human" deliberately omitted — too many cases (athletes, artists,
+    # politicians, scientists). Better to fall through to "other" than
+    # to mislabel.
+}
 
-    # Backstops from PRD-025 entity class. Lower confidence — only
-    # used when no paragraph rule has fired. A "place" event with no
-    # other signal is almost always foreign-affairs / world news.
-    if entity_class == "place":
-        return "world"
-    if entity_class == "organisation":
-        return "business"
-    if entity_class == "work":
-        return "culture"
-    if entity_class == "event":
-        return "world"
-    # "human" with no other signal -> politics is too aggressive;
-    # leave as other so we don't mislabel athletes / artists.
 
-    return "other"
+# ---------------------------------------------------------------------------
+# Main classifier
+# ---------------------------------------------------------------------------
 
+def classify(docno: str,
+             paragraph: str | None,
+             wiki_cats: list[str] | None,
+             entity_class: str | None) -> tuple[str, str]:
+    """Returns (bucket, method) where method is 'wiki', 'paragraph',
+    'entity_class', or 'fallback'."""
+    if wiki_cats:
+        b, votes = vote_from_wiki_categories(wiki_cats)
+        # Only trust the wiki-vote if at least one category voted.
+        # votes >= 1 means we found something; below that the entity
+        # only matched stop-categories.
+        if b is not None and votes >= 1:
+            return b, "wiki"
+
+    pb = classify_paragraph(paragraph)
+    if pb:
+        return pb, "paragraph"
+
+    if entity_class and entity_class in CLASS_BACKSTOPS:
+        return CLASS_BACKSTOPS[entity_class], "entity_class"
+
+    return "other", "fallback"
+
+
+# ---------------------------------------------------------------------------
+# Build driver
+# ---------------------------------------------------------------------------
 
 def build(journal_path: Path, out_path: Path,
+          wiki_cache_path: Path | None = None,
           entity_class_path: Path | None = None) -> dict:
     if not journal_path.exists():
         print(f"ERROR: journal not found at {journal_path}", file=sys.stderr)
         return {}
+
+    wiki_cats: dict[str, list[str]] = {}
+    if wiki_cache_path and wiki_cache_path.exists():
+        print(f"reading wikipedia categories: {wiki_cache_path}", flush=True)
+        try:
+            with open(wiki_cache_path, encoding="utf-8") as f:
+                cache = json.load(f)
+            wiki_cats = cache.get("categories", {})
+            print(f"  {len(wiki_cats):,} entities with Wikipedia categories",
+                  flush=True)
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"  WARN: could not load wiki-cats: {e}", flush=True)
+
     entity_classes: dict[str, str] = {}
     if entity_class_path and entity_class_path.exists():
         print(f"reading entity classes: {entity_class_path}", flush=True)
         try:
             with open(entity_class_path, encoding="utf-8") as f:
                 entity_classes = json.load(f)
-            print(f"  {len(entity_classes):,} classifications loaded", flush=True)
+            print(f"  {len(entity_classes):,} classifications loaded",
+                  flush=True)
         except (OSError, json.JSONDecodeError) as e:
-            print(f"  WARN: couldn't load entity-class file: {e}", flush=True)
+            print(f"  WARN: could not load entity-class file: {e}", flush=True)
 
     print(f"reading journal: {journal_path}", flush=True)
-    seen: dict[str, str] = {}   # key=docno:event_date -> category
-    counts: Counter = Counter()
+    seen: dict[str, str] = {}
+    method_counts: Counter = Counter()
     n_lines = 0
     with open(journal_path, encoding="utf-8") as f:
         for line in f:
@@ -233,21 +337,29 @@ def build(journal_path: Path, out_path: Path,
             if not docno or not ev_date:
                 continue
             key = f"{docno}:{ev_date}"
-            cat = classify(docno, rec.get("title"),
-                           rec.get("event_paragraph"),
-                           entity_classes.get(docno))
-            seen[key] = cat   # last write wins; latest paragraph drives the choice
+            cat, method = classify(
+                docno,
+                rec.get("event_paragraph"),
+                wiki_cats.get(docno),
+                entity_classes.get(docno),
+            )
+            seen[key] = cat
+            method_counts[method] += 1
+
+    counts: Counter = Counter()
     for cat in seen.values():
         counts[cat] += 1
     print(f"  scanned {n_lines:,} lines, classified {len(seen):,} unique "
           f"(docno, event_date) pairs", flush=True)
+    print(f"  method breakdown: {dict(method_counts)}", flush=True)
     for cat in CATEGORIES:
         print(f"    {cat:10s} {counts[cat]:>6}", flush=True)
 
     payload = {
-        "version": 1,
+        "version": 2,
         "categories": seen,
         "counts": dict(counts),
+        "method_counts": dict(method_counts),
         "built_at": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -266,11 +378,15 @@ def main() -> int:
                    default=DEFAULT_TRENDING_DIR / "events.jsonl")
     p.add_argument("--output", type=Path,
                    default=DEFAULT_TRENDING_DIR / "events.categories.json")
+    p.add_argument("--wiki-cats", type=Path,
+                   default=DEFAULT_TRENDING_DIR / "wikipedia_categories.json",
+                   help="Wikipedia-categories cache built by "
+                        "fetch_wikipedia_categories.py")
     p.add_argument("--entity-class", type=Path,
                    default=Path("/mnt/wikipedia-source/related/entity_class.json"),
-                   help="PRD-025 entity-class JSON; missing is fine (skip backstop)")
+                   help="PRD-025 entity-class JSON; backstop only")
     args = p.parse_args()
-    build(args.journal, args.output, args.entity_class)
+    build(args.journal, args.output, args.wiki_cats, args.entity_class)
     return 0
 
 
