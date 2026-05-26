@@ -189,32 +189,42 @@
     z-index: 1;
   }
 
+  /* Week-view card masonry. CSS columns so card heights vary
+     naturally — long event paragraphs grow vertically, short ones
+     stay compact. Image-aspect classes give the visual variety. */
   .cards {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-    gap: 14px;
+    column-count: 3;
+    column-gap: 14px;
   }
+  @media (max-width: 880px) { .cards { column-count: 2; } }
+  @media (max-width: 540px) { .cards { column-count: 1; } }
   .card {
+    display: block;
     background: var(--surface);
     border-radius: 10px;
     overflow: hidden;
     border: 1px solid var(--line);
-    display: flex;
-    flex-direction: column;
     transition: transform 160ms ease, box-shadow 160ms ease;
     text-decoration: none;
     color: inherit;
+    margin: 0 0 14px;
+    break-inside: avoid;
   }
   .card:hover {
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(0,0,0,0.06);
   }
+  /* Cards vary image-aspect by rank, so the column is broken up. */
   .card .image {
     aspect-ratio: 16/10;
     background: var(--ent-color, var(--ent-default));
     position: relative;
     overflow: hidden;
   }
+  .card.card-tall  .image { aspect-ratio: 3/4; }
+  .card.card-wide  .image { aspect-ratio: 16/9; }
+  .card.card-short .image { aspect-ratio: 2/1; }
+  .card.no-image .image { display: none; }
   .card .image img {
     width: 100%;
     height: 100%;
@@ -345,20 +355,56 @@
     color: var(--muted);
     margin-left: 12px;
   }
-
-  /* Bricks: 6-column grid with rank-hint driven tile sizes. */
-  .bricks {
-    display: grid;
-    grid-template-columns: repeat(6, 1fr);
-    grid-auto-rows: 110px;
-    grid-auto-flow: dense;
-    gap: 12px;
+  /* Category section heading inside a day. */
+  .category-section { margin-top: 22px; }
+  .category-section:first-child { margin-top: 0; }
+  .category-heading {
+    margin: 0 0 12px;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 6px;
   }
+  .category-heading .cat-name {
+    font-size: 0.92rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text);
+  }
+  .category-heading .cat-count {
+    font-size: 0.74rem;
+    color: var(--muted);
+    background: var(--line);
+    border-radius: 999px;
+    padding: 0 9px;
+    min-width: 24px;
+    text-align: center;
+  }
+
+  /* ── Pinterest-style masonry ─────────────────────────────────────
+     CSS columns lay tiles out top-to-bottom in each column, so we get
+     variable-height tiles for free without a JS layout pass. Order is
+     column-major rather than row-major; we sort tiles by rank desc
+     before render so the visually-prominent tiles land near the top.
+     break-inside avoids tiles splitting across columns. */
+  .bricks {
+    column-count: 4;
+    column-gap: 14px;
+    /* Tighter columns on mid-size viewports. */
+  }
+  @media (max-width: 980px) { .bricks { column-count: 3; } }
+  @media (max-width: 640px) { .bricks { column-count: 2; } }
+  @media (max-width: 420px) { .bricks { column-count: 1; } }
+
   .brick {
-    grid-column: span 2;
-    grid-row: span 1;
+    display: block;
+    width: 100%;
+    margin: 0 0 14px;
+    break-inside: avoid;
     position: relative;
-    border-radius: 10px;
+    border-radius: 12px;
     overflow: hidden;
     background: var(--ent-color, var(--ent-default));
     color: #fff;
@@ -371,16 +417,29 @@
   }
   .brick:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 14px rgba(0,0,0,0.10);
+    box-shadow: 0 6px 18px rgba(0,0,0,0.10);
   }
-  .brick.size-m { grid-column: span 2; grid-row: span 1; }
-  .brick.size-l { grid-column: span 3; grid-row: span 2; }
-  .brick.size-xl { grid-column: span 4; grid-row: span 2; }
-  .brick.size-s { grid-column: span 2; grid-row: span 1; }
+
+  /* Tile shapes — picked from a small set so the page reads as
+     a deliberate composition rather than CSS noise. Each shape
+     dictates the inner aspect ratio for the image-bearing tiles and
+     the padding for the text-only ones. */
+  .brick.shape-hero    { /* image, big landscape */ aspect-ratio: 4 / 5; }
+  .brick.shape-tall    { /* image, portrait     */ aspect-ratio: 3 / 5; }
+  .brick.shape-wide    { /* image, landscape    */ aspect-ratio: 5 / 3; }
+  .brick.shape-square  { /* image, square       */ aspect-ratio: 1 / 1; }
+  .brick.shape-text    { /* text only, compact  */ padding: 16px 18px 20px; min-height: 110px; }
+  .brick.shape-quote   { /* text only, larger   */ padding: 22px 22px 26px; min-height: 170px; }
+  /* Text-only tiles need to NOT have the gradient overlay. */
+  .brick.shape-text::after,
+  .brick.shape-quote::after { content: none; }
+
   .brick .brick-image {
     position: absolute; inset: 0;
     background-size: cover; background-position: center top;
   }
+  .brick.shape-text .brick-image,
+  .brick.shape-quote .brick-image { display: none; }
   .brick::after {
     content: '';
     position: absolute; inset: 0;
@@ -400,6 +459,14 @@
     font-weight: 700;
     letter-spacing: 0.02em;
   }
+  .brick .brick-ai {
+    /* Small dot next to the entity name when an LLM summary is
+       attached to this brick. Hover reveals via the title attr. */
+    color: var(--ent-color, var(--ent-default));
+    opacity: 0.55;
+    margin-left: 3px;
+    font-weight: 900;
+  }
   .brick .brick-label {
     position: absolute;
     left: 12px; right: 12px; bottom: 10px;
@@ -413,10 +480,22 @@
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
-  .brick.size-l .brick-label,
-  .brick.size-xl .brick-label {
-    font-size: 1.02rem;
-    -webkit-line-clamp: 4;
+  .brick.shape-hero .brick-label { font-size: 1.08rem; -webkit-line-clamp: 4; }
+  .brick.shape-wide .brick-label { font-size: 0.96rem; -webkit-line-clamp: 3; }
+
+  /* Text-only tiles use a different label position + style — no
+     absolute, no shadow, since there's no image to fight with. */
+  .brick.shape-text .brick-label,
+  .brick.shape-quote .brick-label {
+    position: static;
+    text-shadow: none;
+    color: #fff;
+    -webkit-line-clamp: 6;
+    margin-top: 26px;
+  }
+  .brick.shape-quote .brick-label {
+    font-size: 1.04rem;
+    line-height: 1.4;
   }
 
   /* Expanded event detail panel (inline, sits above the bricks). */
@@ -454,6 +533,16 @@
     line-height: 1.55;
     color: var(--text);
   }
+  .event-detail .ed-summary {
+    margin: 0 0 10px;
+    font-size: 0.95rem;
+    line-height: 1.55;
+    color: var(--text);
+  }
+  .event-detail .ed-summary p { margin: 0 0 8px; }
+  .event-detail .ed-summary ul { margin: 0 0 8px; padding-left: 20px; }
+  .event-detail .ed-summary li { margin: 0 0 4px; }
+  .event-detail .ed-summary strong { color: var(--ent-color, var(--text)); }
   .event-detail .ed-meta {
     font-size: 0.76rem;
     color: var(--muted);
@@ -630,13 +719,11 @@
     .day-label { left: -56px; width: 50px; }
     .day-label .num { font-size: 1.4rem; }
     .day::before { left: -22px; }
-    .cards { grid-template-columns: 1fr; }
+    /* .cards uses its own column-count @media; nothing to override here. */
     .page-header { padding: 0 16px; }
-    /* Bricks collapse to a 2-column grid on phones. */
-    .bricks { grid-template-columns: repeat(2, 1fr); grid-auto-rows: 130px; }
-    .brick, .brick.size-m { grid-column: span 1; grid-row: span 1; }
-    .brick.size-l { grid-column: span 2; grid-row: span 1; }
-    .brick.size-xl { grid-column: span 2; grid-row: span 2; }
+    /* Bricks masonry handles its own breakpoints via @media earlier
+       in the file (column-count steps down to 2, then 1). Nothing
+       needed here. */
     /* Month grid: keep 7 columns but compact cells. Show at most 2
        entry pills, hide the rest behind the more-counter. */
     .month-grid { gap: 4px; }
@@ -697,6 +784,37 @@
   });
 
   const esc = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+  // Minimal markdown -> HTML, ported from index.html. Handles **bold**
+  // and "- " bullets only; same shape the LLM emits for PRD-018/021
+  // summaries.
+  function renderMarkdown(md) {
+    if (!md) return '';
+    const lines = String(md).split(/\r?\n/);
+    const out = [];
+    let para = [];
+    let inList = false;
+    const flushPara = () => {
+      if (para.length) { out.push('<p>' + applyInline(para.join(' ')) + '</p>'); para = []; }
+    };
+    const flushList = () => { if (inList) { out.push('</ul>'); inList = false; } };
+    const applyInline = (s) => esc(s).replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line) { flushPara(); flushList(); continue; }
+      const bullet = line.match(/^[-*]\s+(.+)$/);
+      if (bullet) {
+        flushPara();
+        if (!inList) { out.push('<ul>'); inList = true; }
+        out.push('<li>' + applyInline(bullet[1]) + '</li>');
+      } else {
+        flushList();
+        para.push(line);
+      }
+    }
+    flushPara(); flushList();
+    return out.join('');
+  }
   const proxyImg = (u) => u ? `/img?url=${encodeURIComponent(u)}` : null;
   const titleOf = (docno) => docno.replace(/_/g, ' ');
 
@@ -728,14 +846,21 @@
     return 'var(--ent-default)';
   }
 
-  // ── Brick-size bucket from rank_hint ────────────────────────────
-  // Empirically rank_hint runs ~0.5 to ~3.5. We bucket into 4 sizes;
-  // any one day has a handful of XLs, more Ls, mostly M and S.
-  function brickSize(rank) {
-    if (rank >= 3.0) return 'size-xl';
-    if (rank >= 2.0) return 'size-l';
-    if (rank >= 1.3) return 'size-m';
-    return 'size-s';
+  // ── Brick-shape picker ─────────────────────────────────────────
+  // The shape (aspect ratio + image-vs-text) is picked from a small
+  // vocabulary so the masonry reads as a deliberate composition.
+  // Rank determines weight; presence of an image gates the photo
+  // shapes; an idx-mod tweak alternates portrait/landscape so the
+  // page does not look striped.
+  function brickShape(rank, hasImage, idx) {
+    if (hasImage) {
+      if (rank >= 2.8) return 'shape-hero';                       // big portrait, anchor
+      if (rank >= 2.0) return (idx % 2 === 0) ? 'shape-tall' : 'shape-wide';
+      if (rank >= 1.3) return (idx % 3 === 0) ? 'shape-wide' : 'shape-square';
+      return 'shape-square';                                       // low-rank fallback
+    }
+    if (rank >= 2.0) return 'shape-quote';                         // big text block
+    return 'shape-text';                                            // small text block
   }
 
   // ── Group events by event_date ──────────────────────────────────
@@ -769,11 +894,21 @@
     const parts = ['<div class="timeline">'];
     for (const [date, evs] of groups) {
       const { num, dow } = formatDayLabel(date);
-      const cards = evs.map(e => {
+      const cards = evs.map((e, idx) => {
         const color = colorVar(colors, e.docno);
         const title = e.title || titleOf(e.docno || '');
         const para = e.event_paragraph || 'Trended on this date.';
-        const img = e.image_url ? `<img src="${esc(proxyImg(e.image_url))}" alt=""
+        const hasImage = !!e.image_url;
+        // Vary card shape by rank + position so each day reads as a
+        // composed page, not a uniform card grid. Top of the day gets
+        // the tall variant; every 3rd item alternates wide.
+        let shapeCls = '';
+        const rank = e.rank_hint || 0;
+        if (!hasImage) shapeCls = 'no-image';
+        else if (idx === 0 && rank >= 2.5) shapeCls = 'card-tall';
+        else if (idx % 4 === 0) shapeCls = 'card-wide';
+        else if (idx % 5 === 0) shapeCls = 'card-short';
+        const img = hasImage ? `<img src="${esc(proxyImg(e.image_url))}" alt=""
           onerror="this.style.display='none'">` : '';
         const sourceLabel =
           e.event_source === 'news_rss'          ? 'via news headlines' :
@@ -781,7 +916,7 @@
           e.event_source === 'spike_only'        ? 'trending only' :
                                                    'from Wikipedia';
         const searchHref = `/?q=${encodeURIComponent(title)}`;
-        return `<a class="card" href="${esc(searchHref)}" style="--ent-color: ${color};">
+        return `<a class="card ${shapeCls}" href="${esc(searchHref)}" style="--ent-color: ${color};">
           <div class="image">
             <span class="entity-tag">${esc(title)}</span>
             ${img}
@@ -844,21 +979,79 @@
     }
 
     const colors = payload.entity_colors || {};
-    const bricks = events.map((e, idx) => {
+
+    // Render one brick HTML element for an event at its original idx
+    // in the flat `events` array — so the click handler can look up
+    // the same event regardless of how we group.
+    function brickHTML(e, idx, groupIdx) {
       const color = colorVar(colors, e.docno);
       const title = e.title || titleOf(e.docno || '');
-      const sizeCls = brickSize(e.rank_hint || 0);
-      const imgStyle = e.image_url
+      const hasImage = !!e.image_url;
+      const shapeCls = brickShape(e.rank_hint || 0, hasImage, groupIdx);
+      const imgStyle = hasImage
         ? `background-image: url('${esc(proxyImg(e.image_url))}');`
         : '';
-      return `<button class="brick ${sizeCls}" data-idx="${idx}"
+      // When an LLM-generated summary is present, show the first
+      // ~24 chars of the **bolded** entity headline (the prompt
+      // emits "**Entity** lede sentence...") as the brick label.
+      // Otherwise fall back to the raw event_paragraph.
+      let labelText = e.event_paragraph || title;
+      if (e.summary_md) {
+        const firstLine = e.summary_md.split('\n')[0].trim();
+        labelText = firstLine.replace(/\*\*/g, '');
+      }
+      const aiTag = e.summary_md ? '<span class="brick-ai" title="LLM summary available">·</span>' : '';
+      return `<button class="brick ${shapeCls}" data-idx="${idx}"
                        style="--ent-color: ${color};"
-                       aria-label="${esc(title)}: ${esc(e.event_paragraph || '')}">
+                       aria-label="${esc(title)}: ${esc(labelText)}">
         <div class="brick-image" style="${imgStyle}"></div>
-        <span class="brick-entity">${esc(title)}</span>
-        <span class="brick-label">${esc(e.event_paragraph || title)}</span>
+        <span class="brick-entity">${esc(title)}${aiTag}</span>
+        <span class="brick-label">${esc(labelText)}</span>
       </button>`;
-    }).join('');
+    }
+
+    // Group by category if available. If no event has a category, fall
+    // back to a single ungrouped masonry — graceful degradation when
+    // the classifier sidecar has not yet been built.
+    const CATEGORY_ORDER = ['world','politics','business','tech',
+                            'science','sport','culture','other'];
+    const CATEGORY_LABELS = {
+      world:    'World',
+      politics: 'Politics',
+      business: 'Business',
+      tech:     'Technology',
+      science:  'Science & Health',
+      sport:    'Sport',
+      culture:  'Culture',
+      other:    'Also today',
+    };
+    const hasAnyCategory = events.some(e => e.category);
+    let sectionsHtml = '';
+    if (hasAnyCategory) {
+      const grouped = {};
+      events.forEach((e, idx) => {
+        const cat = e.category || 'other';
+        if (!grouped[cat]) grouped[cat] = [];
+        grouped[cat].push({ e, idx });
+      });
+      const orderedCats = CATEGORY_ORDER.filter(c => grouped[c] && grouped[c].length);
+      sectionsHtml = orderedCats.map(cat => {
+        const items = grouped[cat];
+        const bricksForGroup = items
+          .map(({ e, idx }, gIdx) => brickHTML(e, idx, gIdx))
+          .join('');
+        return `<section class="category-section">
+          <h3 class="category-heading">
+            <span class="cat-name">${esc(CATEGORY_LABELS[cat] || cat)}</span>
+            <span class="cat-count">${items.length}</span>
+          </h3>
+          <div class="bricks">${bricksForGroup}</div>
+        </section>`;
+      }).join('');
+    } else {
+      const flat = events.map((e, idx) => brickHTML(e, idx, idx)).join('');
+      sectionsHtml = `<div class="bricks">${flat}</div>`;
+    }
 
     content.innerHTML = `
       <div class="day-detail">
@@ -872,7 +1065,7 @@
           <span class="small">${events.length} events from Wikipedia</span>
         </h2>
         <div id="eventDetail"></div>
-        <div class="bricks" id="bricks">${bricks}</div>
+        <div id="bricks">${sectionsHtml}</div>
       </div>`;
 
     // Click delegation: expand the clicked brick inline above the grid.
@@ -892,13 +1085,20 @@
         e.event_source === 'spike_only'        ? 'trending only — no event copy available' :
                                                  'from Wikipedia';
       const wikiUrl = `https://en.wikipedia.org/wiki/${encodeURIComponent(e.docno || '')}`;
+      // Prefer the LLM-generated summary_md when present; fall back
+      // to the raw event_paragraph the gate captured. The summary_md
+      // is rendered via the minimal markdown helper above so bold +
+      // bullets come through.
+      const bodyHtml = e.summary_md
+        ? `<div class="ed-summary">${renderMarkdown(e.summary_md)}</div>`
+        : `<p class="ed-para">${esc(e.event_paragraph || '')}</p>`;
       detailHost.innerHTML = `
         <div class="event-detail" style="--ent-color: ${color};">
           <div class="ed-head">
             <span class="ed-title">${esc(title)}</span>
             <button class="ed-close" aria-label="Close">×</button>
           </div>
-          <p class="ed-para">${esc(e.event_paragraph || '')}</p>
+          ${bodyHtml}
           <p class="ed-meta">${esc(sourceLabel)}
              <a href="/?q=${encodeURIComponent(title)}">Search</a>
              <a href="${esc(wikiUrl)}" target="_blank" rel="noopener noreferrer">Wikipedia</a>

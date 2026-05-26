@@ -146,6 +146,9 @@ def build(journal_path: Path,
           images_store: Path, images_map: Path,
           entity_class_path: Path,
           out_dir: Path,
+          categories_path: Path | None = None,
+          summaries_store: Path | None = None,
+          summaries_map: Path | None = None,
           today: dt.date | None = None,
           horizon_days: int = 90,
           class_weights: dict[str, float] | None = None) -> None:
@@ -194,7 +197,33 @@ def build(journal_path: Path,
         "unknown":      0.90,
     }
 
+    # PRD-029 step 2: category sidecar join, if present.
+    categories: dict[str, str] = {}
+    if categories_path and categories_path.exists():
+        print(f"loading categories: {categories_path}", flush=True)
+        try:
+            with open(categories_path, encoding="utf-8") as f:
+                cat_payload = json.load(f)
+            categories = cat_payload.get("categories") or {}
+            print(f"  {len(categories):,} category assignments", flush=True)
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"  WARN: couldn't load categories: {e}", flush=True)
+
+    # PRD-029 step 3: LLM event-summary join, if the summaries
+    # FlatStore is present and has any <docno>:<event_date>:event keys.
+    summaries = None
+    sum_keys: set[str] = set()
+    if summaries_store and summaries_map and summaries_store.exists() and summaries_map.exists():
+        print(f"loading summaries store: {summaries_store}", flush=True)
+        summaries = FlatStoreRO(summaries_store, summaries_map)
+        if summaries.load():
+            sum_keys = {k for k in summaries._map.keys() if k.endswith(":event")}
+            print(f"  {len(sum_keys):,} event-summary keys", flush=True)
+        else:
+            summaries = None
+
     # Enrich each record.
+    n_with_summary = 0
     for r in fresh:
         docno = r["docno"]
         if images_ok:
@@ -204,7 +233,20 @@ def build(journal_path: Path,
         cls = entity_classes.get(docno)
         if cls:
             r["entity_class"] = cls
+        cat = categories.get(f"{docno}:{r.get('event_date', '')}")
+        if cat:
+            r["category"] = cat
+        if summaries is not None:
+            key = f"{docno}:{r.get('event_date', '')}:event"
+            if key in sum_keys:
+                body = summaries.get(key)
+                if body:
+                    r["summary_md"] = body
+                    n_with_summary += 1
         r["rank_hint"] = round(compute_rank_hint(r, class_weights), 4)
+    if summaries is not None:
+        summaries.close()
+        print(f"  joined LLM summary onto {n_with_summary:,} events", flush=True)
 
     images.close()
 
@@ -280,6 +322,16 @@ def main() -> int:
                    default=DEFAULT_VOLUME / "enwiki_top1m_images.map")
     p.add_argument("--entity-class", type=Path,
                    default=DEFAULT_VOLUME / "related" / "entity_class.json")
+    p.add_argument("--categories", type=Path,
+                   default=DEFAULT_TRENDING_DIR / "events.categories.json",
+                   help="PRD-029 step 2 category sidecar; missing is fine "
+                        "(events render without grouping).")
+    p.add_argument("--summaries-store", type=Path,
+                   default=DEFAULT_VOLUME / "summaries.store",
+                   help="PRD-029 step 3 LLM-summary FlatStore; missing is "
+                        "fine (events render without summary_md).")
+    p.add_argument("--summaries-map", type=Path,
+                   default=DEFAULT_VOLUME / "summaries.map")
     p.add_argument("--out-dir", type=Path,
                    default=DEFAULT_TRENDING_DIR)
     p.add_argument("--horizon-days", type=int, default=90,
@@ -295,6 +347,9 @@ def main() -> int:
         return 1
     build(args.journal, args.images_store, args.images_map,
           args.entity_class, args.out_dir,
+          categories_path=args.categories,
+          summaries_store=args.summaries_store,
+          summaries_map=args.summaries_map,
           horizon_days=args.horizon_days)
     return 0
 
