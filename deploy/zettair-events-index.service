@@ -7,9 +7,11 @@ Wants=network-online.target
 Type=oneshot
 User=zettair
 WorkingDirectory=/opt/zettair-search
+# PRD-029 step 2: classify events first so the index build can join.
+ExecStartPre=/usr/bin/python3 -u /opt/zettair-search/tools/build_event_categories.py
+# Main: build the events.jsonl + events.idx (now with categories joined).
 ExecStart=/usr/bin/python3 -u /opt/zettair-search/tools/build_events_index.py
-# Chain the entity-colour assignment right after the index build, so
-# /api/events sees a fresh colour map next time the service restarts.
+# Then refresh entity-colour assignments based on the latest journal.
 ExecStartPost=/usr/bin/python3 -u /opt/zettair-search/tools/build_entity_colors.py
 StandardOutput=journal
 StandardError=journal
