@@ -772,10 +772,14 @@
       const cards = evs.map(e => {
         const color = colorVar(colors, e.docno);
         const title = e.title || titleOf(e.docno || '');
-        const para = e.event_paragraph || '';
+        const para = e.event_paragraph || 'Trended on this date.';
         const img = e.image_url ? `<img src="${esc(proxyImg(e.image_url))}" alt=""
           onerror="this.style.display='none'">` : '';
-        const sourceLabel = e.event_source === 'news_rss' ? 'via news headlines' : 'from Wikipedia';
+        const sourceLabel =
+          e.event_source === 'news_rss'          ? 'via news headlines' :
+          e.event_source === 'news_rss_backfill' ? 'via news headlines (backfill)' :
+          e.event_source === 'spike_only'        ? 'trending only' :
+                                                   'from Wikipedia';
         const searchHref = `/?q=${encodeURIComponent(title)}`;
         return `<a class="card" href="${esc(searchHref)}" style="--ent-color: ${color};">
           <div class="image">
@@ -882,7 +886,11 @@
       const e = events[idx];
       const color = colorVar(colors, e.docno);
       const title = e.title || titleOf(e.docno || '');
-      const sourceLabel = e.event_source === 'news_rss' ? 'via news headlines' : 'from Wikipedia';
+      const sourceLabel =
+        e.event_source === 'news_rss'          ? 'via news headlines' :
+        e.event_source === 'news_rss_backfill' ? 'via news headlines (backfill)' :
+        e.event_source === 'spike_only'        ? 'trending only — no event copy available' :
+                                                 'from Wikipedia';
       const wikiUrl = `https://en.wikipedia.org/wiki/${encodeURIComponent(e.docno || '')}`;
       detailHost.innerHTML = `
         <div class="event-detail" style="--ent-color: ${color};">
