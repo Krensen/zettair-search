@@ -254,17 +254,23 @@ def _load_events_index() -> None:
         with open(EVENTS_IDX_PATH, encoding="utf-8") as f:
             payload = json.load(f)
         global _events_idx, _events_fd
-        if payload.get("version") != 1:
-            print(f"WARNING: {EVENTS_IDX_PATH} unsupported version "
-                  f"{payload.get('version')!r}", flush=True)
+        # Versions 1 and 2 share the event_date_index shape; version 2
+        # adds an optional day_summaries block. Unknown future versions
+        # are still accepted as long as event_date_index is present —
+        # missing optional blocks degrade to "no day summary".
+        version = payload.get("version")
+        if version not in (1, 2) and "event_date_index" not in payload:
+            print(f"WARNING: {EVENTS_IDX_PATH} unsupported shape "
+                  f"(version={version!r}, no event_date_index)", flush=True)
             return
         _events_idx = payload
         _events_fd = os.open(EVENTS_JSONL_PATH, os.O_RDONLY)
         ndates = len(payload.get("event_date_index", {}))
         ntot = payload.get("total_events", 0)
+        nday = len(payload.get("day_summaries") or {})
         size_kb = os.path.getsize(EVENTS_JSONL_PATH) / 1024
-        print(f"  events-index: {ntot:,} events across {ndates:,} dates "
-              f"({size_kb:.1f} KB)", flush=True)
+        print(f"  events-index v{version}: {ntot:,} events across {ndates:,} dates, "
+              f"{nday} day-summaries ({size_kb:.1f} KB)", flush=True)
     except (OSError, json.JSONDecodeError) as e:
         print(f"WARNING: couldn't load events index: {e}", flush=True)
 
