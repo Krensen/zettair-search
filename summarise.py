@@ -78,22 +78,94 @@ _APOS_NORM = str.maketrans({'’': "'", '‘': "'"})
 # Sentence boundary regex, compiled once.
 _RE_SENTENCE_SPLIT = re.compile(r'(?<=[.!?])\s+(?=[A-Z(])')
 
+# PRD-030 #3: hard splits. Bullet markers at start-of-line, paragraph
+# breaks, and standalone em-dash separators are NOT sentence ends but
+# they DO break fragments. Applied as a preprocessing pass before the
+# soft-split regex.
+_RE_HARD_SPLIT = re.compile(
+    r'\n{2,}'                # paragraph break
+    r'|(?<=\s)[*•·–—]\s+'    # bullet marker after whitespace
+    r'|\n[*•·]\s*'           # bullet at line start
+    r'|\s+[–—]\s+'           # em-dash separator (with surrounding spaces)
+)
+
+# PRD-030 #3: inline citation markers ("[12]", "[14a]") get stripped
+# before splitting so they do not leak into snippets.
+_RE_CITATION_MARK = re.compile(r'\[\d+[a-z]?\]')
+
 # Strip-set for stray edge punctuation on chosen fragments (PRD-030 #4).
 # Covers ASCII quotes + typographic open/close + leading bullet markers.
 _EDGE_STRIP = ' \t\n"“”\'‘’*•·–—-'
 
+# PRD-030 #3: common English abbreviations that the soft-split regex
+# would otherwise wrongly use as sentence ends. After splitting, we
+# reconnect fragments whose left side ends in one of these tokens.
+_ABBREVIATIONS = frozenset({
+    "dr.", "mr.", "mrs.", "ms.", "jr.", "sr.", "st.",
+    "vs.", "etc.", "e.g.", "i.e.", "cf.", "no.", "vol.", "pp.",
+    "u.s.", "u.k.", "u.n.", "e.u.", "a.m.", "p.m.",
+    "ph.d.", "b.c.", "a.d.", "b.c.e.", "c.e.",
+    # Single-initial: "j." in "j. r. r. tolkien" etc. Trailing dot
+    # makes the regex treat each initial as its own sentence end.
+    # We catch single-letter initials by length below.
+})
+
+
+def _ends_with_abbreviation(text: str) -> bool:
+    """Return True if `text` ends with a token from _ABBREVIATIONS or
+    looks like a single-letter initial (e.g. 'J.', 'R.'). Used by the
+    sentence-split merge step."""
+    if not text:
+        return False
+    if len(text) >= 2 and text[-1] == "." and text[-2].isalpha() and (
+        len(text) < 3 or not text[-3].isalpha()
+    ):
+        # Single initial: last char is ".", char before is alpha, char
+        # before that is NOT alpha (so we don't catch "ended.").
+        return True
+    tail = text.rsplit(None, 1)[-1].lower() if " " in text else text.lower()
+    return tail in _ABBREVIATIONS
+
 
 def split_fragments(text: str) -> list[str]:
-    """Split text into sentence fragments. No quality filter — that runs later."""
-    fragments = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
+    """Split text into sentence fragments. No quality filter — that runs later.
+
+    PRD-030 #3: three-pass split:
+      1. Strip inline citation markers like "[12]" so they don't leak.
+      2. Hard splits on paragraph breaks, bullet markers, em-dash
+         separators. Stops a Wikipedia bulleted infobox from arriving
+         as one 600-char "fragment" that fools the prose-verb filter
+         on a single buried verb.
+      3. Soft splits on sentence punctuation. After the soft split we
+         merge any fragment whose left half ends in a known
+         abbreviation (Dr., U.S., J.) — otherwise "Dr. Smith" splits
+         mid-name and the snippet looks broken.
+    """
+    # Step 1: strip inline citation markers.
+    text = _RE_CITATION_MARK.sub("", text)
+
+    # Step 2: hard splits.
+    parts = _RE_HARD_SPLIT.split(text)
+
+    fragments: list[str] = []
+    for chunk in parts:
+        chunk = chunk.strip()
+        if not chunk:
             continue
-        for p in _RE_SENTENCE_SPLIT.split(line):
+        # Step 3: soft splits within the chunk, with abbreviation-merge.
+        pieces = _RE_SENTENCE_SPLIT.split(chunk)
+        merged: list[str] = []
+        for p in pieces:
             p = p.strip()
-            if p:
-                fragments.append(p)
+            if not p:
+                continue
+            # If the previous fragment ended in "Dr." / "U.S." / "J.",
+            # the regex wrongly split mid-name — glue them back.
+            if merged and _ends_with_abbreviation(merged[-1]):
+                merged[-1] = merged[-1] + " " + p
+            else:
+                merged.append(p)
+        fragments.extend(merged)
     return fragments
 
 
