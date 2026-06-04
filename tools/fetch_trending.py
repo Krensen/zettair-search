@@ -364,7 +364,30 @@ def fetch_latest_available(max_lookback_hours: int = 96) -> tuple[dt.datetime, d
 
 def fetch_dump(hour: dt.datetime) -> dict[str, int]:
     """Fetch one hourly pageview dump and return {title: views} for en
-    (desktop + mobile combined). Returns {} if the dump 404s."""
+    (desktop + mobile combined), capped at the top TOP_SAMPLE_KEEP
+    titles by view count. Returns {} if the dump 404s.
+
+    Memory note: the raw dump has ~1.9M en titles. Building the full
+    {title: views} dict (~350-500 MB) was the source of repeated OOM
+    kills on prod — we only ever use the top ~10k downstream, so the
+    rest is wasted RAM. This implementation periodically prunes the
+    working dict so peak memory stays bounded regardless of dump
+    size:
+
+      - Accumulate into a dict so we can merge `en` and `en.m`
+        contributions for the same title (the dump lists them on
+        separate lines, often non-adjacent).
+      - When the dict crosses 4*TOP_SAMPLE_KEEP entries, sort and
+        keep the top 2*TOP_SAMPLE_KEEP. The 2x overshoot gives merge
+        headroom so a late `en.m` line whose `en` counterpart was
+        already pruned still gets its own slot.
+      - At end, slice to TOP_SAMPLE_KEEP and return as a dict.
+
+    Peak dict size with TOP_SAMPLE_KEEP=10000: 40k entries (~7-10 MB)
+    instead of 1.9M (~400 MB). Throughput is unchanged in practice;
+    the periodic sort is O(n log n) on at most 40k entries, fires
+    perhaps ~50 times per dump, totalling well under a second.
+    """
     url = DUMP_URL_TEMPLATE.format(
         year=hour.year, month=hour.month, day=hour.day, hour=hour.hour,
     )
@@ -372,9 +395,7 @@ def fetch_dump(hour: dt.datetime) -> dict[str, int]:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         # Stream-decompress the gzipped dump instead of buffering ~60 MB
-        # of compressed bytes in RAM. The host has been OOM-killing this
-        # process when memory is tight; eliminating the full-body buffer
-        # cuts peak heap by a chunk.
+        # of compressed bytes in RAM.
         resp = urllib.request.urlopen(req, timeout=120)
     except urllib.error.HTTPError as e:
         if e.code == 404:
@@ -382,7 +403,11 @@ def fetch_dump(hour: dt.datetime) -> dict[str, int]:
             return {}
         raise
 
+    prune_at  = TOP_SAMPLE_KEEP * 4   # trigger
+    keep_to   = TOP_SAMPLE_KEEP * 2   # back down to (merge headroom)
     counts: dict[str, int] = {}
+    n_lines_kept = 0
+    n_prunes = 0
     with resp, gzip.open(resp, "rt", encoding="utf-8", errors="replace") as gz:
         for line in gz:
             # Format: <project> <title> <views> <bytes>
@@ -399,7 +424,18 @@ def fetch_dump(hour: dt.datetime) -> dict[str, int]:
             except ValueError:
                 continue
             counts[title] = counts.get(title, 0) + v
-    log(f"  parsed {len(counts):,} en titles")
+            n_lines_kept += 1
+            if len(counts) >= prune_at:
+                # Sort by views desc, take top keep_to, rebuild the dict.
+                top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:keep_to]
+                counts = dict(top)
+                n_prunes += 1
+    # Final prune to TOP_SAMPLE_KEEP.
+    if len(counts) > TOP_SAMPLE_KEEP:
+        top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:TOP_SAMPLE_KEEP]
+        counts = dict(top)
+    log(f"  parsed {n_lines_kept:,} en lines -> kept top {len(counts):,} "
+        f"({n_prunes} prune passes)")
     return counts
 
 
