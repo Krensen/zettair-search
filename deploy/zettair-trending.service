@@ -13,13 +13,19 @@ StandardOutput=journal
 StandardError=journal
 
 # Memory cap so a pathological day cannot OOM the box. Empirical
-# floor: the gzipped pageviews dump streams in at ~60 MB and the
-# in-memory counts dict reaches ~1.7M Python str keys (~250-400 MB).
-# Plus PRD-022/026: the specificity gate fetches Wikipedia wikitext
-# for up to MAX_CANDIDATES_TO_GATE candidates and Google News + ITN
-# headlines for each, then caches them. The previous 512M was tight
-# and the unit was being OOM-killed mid-run; 1G gives ~2x headroom.
-MemoryMax=1G
+# floor: the gzipped pageviews dump streams in at ~60 MB; the in-
+# memory counts dict has crept up to ~1.9M Python str keys
+# (~350-500 MB) as Wikipedia traffic grows. Plus PRD-022/026: the
+# specificity gate fetches Wikipedia wikitext for up to
+# MAX_CANDIDATES_TO_GATE candidates and Google News + ITN headlines
+# for each, then caches them in-process.
+#
+# History: 512M (PRD-020) -> OOM-killed -> 1G (May 21 fix) -> OOM
+# again at ~1.9M titles (Jun 4) -> 2G now. Box has 7.6 GiB; the
+# search service uses ~2 GiB resident, leaving plenty of headroom.
+# A real fix is to drop the counts-dict altogether (stream straight
+# to the top-1000 with a heap) — tracked as a follow-up.
+MemoryMax=2G
 
 # PRD-021: ExecStartPost chains the news-summary producer right after
 # the trending fetch writes current.json. Both run as zettair so no
