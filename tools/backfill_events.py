@@ -220,6 +220,10 @@ def backfill(start: dt.date, end: dt.date, dry_run: bool = False) -> dict:
     # Walk dates in ascending order so the journal is roughly time-ordered.
     for d in sorted(per_day.keys()):
         titles = per_day[d]
+        # Precompute {title: rank} so the per-title loop is O(1) instead
+        # of O(n) per item via titles.index(). Titles are already
+        # uniquified upstream in load_titles_per_day.
+        title_rank = {t: i + 1 for i, t in enumerate(titles)}
         items: list[dict] = []
         log(f"backfilling {d.isoformat()} ({len(titles)} titles)")
         for title in titles:
@@ -237,7 +241,7 @@ def backfill(start: dt.date, end: dt.date, dry_run: bool = False) -> dict:
                 "title":       display,
                 "event_date":  d.isoformat(),
                 "source":      "spike",        # trending_source label
-                "source_rank": titles.index(title) + 1,
+                "source_rank": title_rank[title],
             }
             if len(hls) >= HEADLINE_MIN:
                 para = ft.synthesise_news_paragraph(display, hls)
