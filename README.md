@@ -145,6 +145,7 @@ All large files live on a separate Hetzner volume, not the boot disk.
 | `enwiki_top1m_snippets.{store,map}` | ~540 MB + ~70 MB | Pre-baked snippet text |
 | `enwiki_top1m_images.{store,map}` | ~120 MB + ~30 MB | Wikimedia image URLs (built with `300px-` URLs — proxy rewrites at fetch time) |
 | `enwiki_top1m_urls.{store,map}` | ~18 MB + ~14 MB | Canonical URLs for the ~330k articles whose dbkey ≠ safe_id |
+| `enwiki_top1m_titles.{store,map}` | ~50 MB + ~70 MB | PRD-031 canonical Wikipedia display title per docno (100% coverage); replaces the URL-parsing hack for title rendering |
 | `enwiki_top1m.docstore` + `.docmap` | ~13 GB + ~57 MB | Cleaned article text for the inline summariser |
 | `enwiki_top1m.reading.bin` | ~9 MB | PRD-027 reading-time + difficulty sidecar (RDT2 packed binary) |
 | `autosuggest.json` | ~27 MB | Sorted `[[query, count], ...]` |
@@ -184,6 +185,7 @@ Configured in `deploy/zettair-search.service`. Values shown match what's deploye
 | `ZET_SNIPPETS_STORE/MAP` | `…_snippets.store/.map` | Pre-baked snippets |
 | `ZET_IMAGES_STORE/MAP` | `…_images.store/.map` | Wikimedia image URLs |
 | `ZET_URLS_STORE/MAP` | `…_urls.store/.map` | Canonical en.wikipedia.org URLs |
+| `ZET_TITLES_STORE/MAP` | `…_titles.store/.map` | PRD-031 canonical display titles per docno |
 | `ZET_DOCSTORE` | `…enwiki_top1m.docstore` | Cleaned article text |
 | `ZET_DOCMAP` | `…enwiki_top1m.docmap` | Docstore offset map |
 | `ZET_AUTOSUGGEST` | `…autosuggest.json` | Autosuggest sorted array |

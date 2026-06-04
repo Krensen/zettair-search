@@ -96,6 +96,12 @@ IMAGES_STORE_PATH   = os.environ.get("ZET_IMAGES_STORE",   os.path.join(_wiki_di
 IMAGES_MAP_PATH     = os.environ.get("ZET_IMAGES_MAP",     os.path.join(_wiki_dir, "enwiki_images.map"))
 URLS_STORE_PATH     = os.environ.get("ZET_URLS_STORE",     os.path.join(_wiki_dir, "enwiki_urls.store"))
 URLS_MAP_PATH       = os.environ.get("ZET_URLS_MAP",       os.path.join(_wiki_dir, "enwiki_urls.map"))
+# PRD-031: canonical Wikipedia display title per docno. Built offline
+# by wiki2trec.py (inline) or build_titles_sidecar.py (bootstrap).
+# Covers 100% of the corpus so server-side rendering needs no
+# fallback URL parsing. See _title_for() below.
+TITLES_STORE_PATH   = os.environ.get("ZET_TITLES_STORE",   os.path.join(_wiki_dir, "enwiki_titles.store"))
+TITLES_MAP_PATH     = os.environ.get("ZET_TITLES_MAP",     os.path.join(_wiki_dir, "enwiki_titles.map"))
 DOCSTORE_PATH       = os.environ.get("ZET_DOCSTORE",       os.path.join(_wiki_dir, "enwiki.docstore"))
 DOCMAP_PATH         = os.environ.get("ZET_DOCMAP",         os.path.join(_wiki_dir, "enwiki.docmap"))
 AUTOSUGGEST_PATH    = os.environ.get("ZET_AUTOSUGGEST",    os.path.join(_wiki_dir, "autosuggest.json"))
@@ -190,6 +196,7 @@ class FlatStore:
 _snippets_store  = FlatStore(SNIPPETS_STORE_PATH,  SNIPPETS_MAP_PATH,  "snippets")
 _images_store    = FlatStore(IMAGES_STORE_PATH,    IMAGES_MAP_PATH,    "images")
 _urls_store      = FlatStore(URLS_STORE_PATH,      URLS_MAP_PATH,      "urls")
+_titles_store    = FlatStore(TITLES_STORE_PATH,    TITLES_MAP_PATH,    "titles")
 _summaries_store = FlatStore(SUMMARIES_STORE_PATH, SUMMARIES_MAP_PATH, "summaries")
 _related_store   = FlatStore(RELATED_STORE_PATH,   RELATED_MAP_PATH,   "related")
 _related_class:  dict = {}   # PRD-025 docno -> class label, loaded at startup
@@ -571,6 +578,7 @@ async def lifespan(app: FastAPI):
     _snippets_store.load()
     _images_store.load()
     _urls_store.load()
+    _titles_store.load()
     _summaries_store.load()
     _related_store.load()
     _load_related_classes()
@@ -588,6 +596,7 @@ async def lifespan(app: FastAPI):
     _snippets_store.close()
     _images_store.close()
     _urls_store.close()
+    _titles_store.close()
     _summaries_store.close()
     _related_store.close()
     _docstore.close()
@@ -613,28 +622,20 @@ async def _load_autosuggest():
         print(f"WARNING: autosuggest file not found: {AUTOSUGGEST_PATH}")
 
 
-def _title_from_url_or_docno(url: str, docno: str) -> str:
-    """Derive a display title that preserves URL-safe punctuation
-    (apostrophes, periods, parens, etc.). The docno is a safe_id with
-    those characters collapsed to '_'; the URL preserves them via the
-    dbkey (~23% of articles). Strip the trailing parenthetical
-    disambiguator ("(film)", "(album)") to match the existing
-    front-end formatTitle behaviour.
+def _title_for(docno: str) -> str:
+    """Canonical display title for a docno.
 
-    PRD-030 #7: previously the front-end derived the title from
-    docno alone, so "Putin's Palace" displayed as "Putin s Palace".
+    PRD-031: source of truth is the titles sidecar (built offline
+    from the Wikipedia <title> element). One O(1) FlatStore lookup.
+
+    Fallback when the sidecar key is missing (corpus-rebuild churn,
+    trending union path articles not yet re-indexed): a trivial
+    docno-to-display transform. Lossy for apostrophes etc., but the
+    server still ships *something* readable. PRD-030 #7 used a URL-
+    parsing hack for this same fallback; the URL-parsing path is
+    now removed entirely.
     """
-    raw = ""
-    if url:
-        path = urllib.parse.urlsplit(url).path
-        if "/wiki/" in path:
-            raw = urllib.parse.unquote(path.rsplit("/wiki/", 1)[-1])
-    if not raw:
-        raw = docno
-    title = raw.replace("_", " ").strip()
-    # Strip "_(disambiguator)" suffix the way the existing frontend does.
-    title = re.sub(r"\s*\([^()]*\)\s*$", "", title)
-    return title or docno
+    return _titles_store.get(docno) or docno.replace("_", " ")
 
 
 def enrich_results(results: list, query: str) -> tuple[list, dict]:
@@ -672,11 +673,11 @@ def enrich_results(results: list, query: str) -> tuple[list, dict]:
             "score": r["score"],
             "docid": r["docid"],
             "docno": docno,
-            # PRD-030 #7: title derived from the dbkey-bearing URL so
-            # apostrophes / periods / parens survive (the docno
-            # collapses them to '_'). Frontend should prefer this
-            # field; falls back to docno-derived if absent.
-            "title": _title_from_url_or_docno(url, docno),
+            # PRD-031: canonical Wikipedia display title from the
+            # offline-built titles sidecar. Single O(1) lookup; no
+            # URL parsing, no safe_id reverse-engineering. Falls
+            # back to docno-with-spaces if the sidecar is missing.
+            "title": _title_for(docno),
             "url": url,
             "snippet": snippet,
             "image_url": _images_store.get(docno),

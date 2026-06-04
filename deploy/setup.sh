@@ -93,6 +93,9 @@ DOCMAP="$VOLUME/enwiki_top1m.docmap"
 AUTOSUGGEST="$VOLUME/autosuggest.json"
 URLS_STORE="$VOLUME/enwiki_top1m_urls.store"
 URLS_MAP="$VOLUME/enwiki_top1m_urls.map"
+# PRD-031: titles sidecar (canonical Wikipedia display title per docno).
+TITLES_STORE="$VOLUME/enwiki_top1m_titles.store"
+TITLES_MAP="$VOLUME/enwiki_top1m_titles.map"
 # PRD-027: reading-time + difficulty sidecar
 READING_SIDECAR="$VOLUME/enwiki_top1m.reading.bin"
 
@@ -717,6 +720,33 @@ if [ ! -f "$URLS_STORE" ]; then
 else
     skipped urls-store "already present"
     log "URLs store present."
+fi
+
+### ── 15a. PRD-031 titles sidecar (zettair, to volume) ─────────────────────
+# wiki2trec.py writes the titles sidecar natively for fresh builds.
+# This step is a bootstrap for indexes that pre-date PRD-031 —
+# extract titles from the existing TREC if the sidecar is missing or
+# stale wrt the TREC.
+
+TITLES_REASON=""
+if [ ! -f "$TITLES_STORE" ] || [ ! -f "$TITLES_MAP" ]; then
+    TITLES_REASON="titles sidecar missing"
+elif [ -e "$TREC_FILE" ] && [ "$TREC_FILE" -nt "$TITLES_STORE" ]; then
+    TITLES_REASON="TREC newer than titles sidecar"
+fi
+if [ -n "$TITLES_REASON" ]; then
+    if [ -f "$TREC_FILE" ]; then
+        decided titles-sidecar "$TITLES_REASON"
+        log "Bootstrapping titles sidecar from TREC (a few minutes)..."
+        as_zettair python3 -u "$WIKI_DIR/build_titles_sidecar.py" \
+            "$TREC_FILE" "$TITLES_STORE" "$TITLES_MAP"
+        log "Titles sidecar written to $TITLES_STORE"
+    else
+        log "WARNING: titles sidecar absent and no TREC to bootstrap from"
+    fi
+else
+    skipped titles-sidecar "present and newer than TREC"
+    log "Titles sidecar up to date — skipping."
 fi
 
 ### ── 15a. PRD-018 summary queue directories (zettair, on volume) ───────────

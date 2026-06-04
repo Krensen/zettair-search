@@ -182,6 +182,10 @@ populate_fully_built() {
     printf 'RDT2' > "$SANDBOX/volume/enwiki_top1m.reading.bin"
     touch -t 202401040000 "$SANDBOX/volume/enwiki_top1m.reading.bin"
 
+    # PRD-031: titles sidecar — newer than TREC so setup.sh skips rebuild.
+    touch -t 202401040000 "$SANDBOX/volume/enwiki_top1m_titles.store"
+    touch -t 202401040000 "$SANDBOX/volume/enwiki_top1m_titles.map"
+
     # zet binary (ELF-ish — we fake the file file-magic check by
     # making it a real ELF if possible, or by stubbing `file`)
     cat > "$SANDBOX/install/zettair/devel/zet" <<'EOF'
@@ -265,6 +269,7 @@ s02_no_op() {
     assert_skipped docstore || ok=0
     assert_skipped reading-sidecar || ok=0
     assert_skipped urls-store || ok=0
+    assert_skipped titles-sidecar || ok=0
     # systemd unit + restart always happen
     assert_decided systemd-unit || ok=0
     assert_decided service-restart || ok=0

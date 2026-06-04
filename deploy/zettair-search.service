@@ -24,6 +24,9 @@ Environment=ZET_IMAGES_STORE=/mnt/wikipedia-source/enwiki_top1m_images.store
 Environment=ZET_IMAGES_MAP=/mnt/wikipedia-source/enwiki_top1m_images.map
 Environment=ZET_URLS_STORE=/mnt/wikipedia-source/enwiki_top1m_urls.store
 Environment=ZET_URLS_MAP=/mnt/wikipedia-source/enwiki_top1m_urls.map
+# PRD-031: canonical display title per docno (replaces the URL-hack).
+Environment=ZET_TITLES_STORE=/mnt/wikipedia-source/enwiki_top1m_titles.store
+Environment=ZET_TITLES_MAP=/mnt/wikipedia-source/enwiki_top1m_titles.map
 Environment=ZET_AUTOSUGGEST=/mnt/wikipedia-source/autosuggest.json
 Environment=ZET_DOCSTORE=/mnt/wikipedia-source/enwiki_top1m.docstore
 Environment=ZET_DOCMAP=/mnt/wikipedia-source/enwiki_top1m.docmap
