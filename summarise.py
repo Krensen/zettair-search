@@ -20,6 +20,17 @@ SHOW_FRAGS = 3
 # Target snippet length in characters (soft limit)
 TARGET_CHARS = 300
 
+# PRD-030 #5: lower minimum fragment length (was 30). A focused short
+# sentence like "Iran agreed to inspections." (27 chars) is now
+# eligible.
+MIN_FRAG_CHARS = 20
+
+# PRD-030 #5: a 600-char surviving fragment (e.g. a bullet paragraph
+# that did not get split) should not be allowed to dominate scoring
+# by accumulating incidental hits across its full length. Score the
+# prefix only; the full fragment still gets displayed.
+MAX_FRAG_SCORE_CHARS = 240
+
 # Stop words
 STOPWORDS = {
     'a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
@@ -180,11 +191,22 @@ def _score_and_check(fragment: str, query_terms: frozenset) -> float:
     Optimised for the common case where most fragments have zero hits:
     walk words, count hits and verb-presence simultaneously, and bail fast
     if no hits found (no need for further filtering — we'd discard it).
+
+    PRD-030 #5:
+      - Minimum length lowered 30 -> MIN_FRAG_CHARS so focused short
+        sentences ("Iran agreed to inspections.") are eligible.
+      - Maximum SCORING window capped at MAX_FRAG_SCORE_CHARS. A 600-
+        char bullet paragraph that survived split_fragments would
+        otherwise dominate via incidental hits across the full length.
+        Display still shows the original fragment; only scoring uses
+        the prefix.
     """
-    if len(fragment) < 30:
+    if len(fragment) < MIN_FRAG_CHARS:
         return 0.0
 
     lower = fragment.lower()
+    if len(lower) > MAX_FRAG_SCORE_CHARS:
+        lower = lower[:MAX_FRAG_SCORE_CHARS]
     words = lower.split()
     if not words:
         return 0.0
