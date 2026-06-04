@@ -70,8 +70,17 @@ _KEEP_ALPHA = string.ascii_lowercase
 _DEL_NONALNUM = str.maketrans('', '', ''.join(c for c in map(chr, range(256)) if c not in _KEEP_ALNUM))
 _DEL_NONALPHA = str.maketrans('', '', ''.join(c for c in map(chr, range(256)) if c not in _KEEP_ALPHA))
 
+# PRD-030: typographic apostrophe (U+2019) normalisation to ASCII '.
+# Cheap two-char translation kept separate from _DEL_NONALNUM so the
+# replacement is applied once at query parse time and once per word.
+_APOS_NORM = str.maketrans({'’': "'", '‘': "'"})
+
 # Sentence boundary regex, compiled once.
 _RE_SENTENCE_SPLIT = re.compile(r'(?<=[.!?])\s+(?=[A-Z(])')
+
+# Strip-set for stray edge punctuation on chosen fragments (PRD-030 #4).
+# Covers ASCII quotes + typographic open/close + leading bullet markers.
+_EDGE_STRIP = ' \t\n"“”\'‘’*•·–—-'
 
 
 def split_fragments(text: str) -> list[str]:
@@ -116,6 +125,13 @@ def _score_and_check(fragment: str, query_terms: frozenset) -> float:
         clean = w.translate(_DEL_NONALNUM) if not w.isalnum() else w
         if clean in query_terms:
             hits += 1
+        # PRD-030: if the doc word carries an apostrophe ("children's"),
+        # also try the apostrophe form against the query set. The query
+        # variants (parse_query) cover the other direction.
+        elif "'" in w or "’" in w:
+            apos_form = w.translate(_APOS_NORM)
+            if apos_form in query_terms:
+                hits += 1
         # Verb check: drop digits/punctuation, see if the resulting alpha-
         # only token is a verb. Same translate trick.
         if not has_verb:
@@ -163,7 +179,9 @@ def summarise_doc(text: str, query_terms: set | frozenset) -> str:
     # so the snippet reads naturally.
     top = sorted(scored, key=lambda x: -x[0])[:SHOW_FRAGS]
     top.sort(key=lambda x: x[1])  # by position
-    snippet = ' … '.join(f for _, _, f in top)
+    # PRD-030 #4: strip stray edge punctuation (quotes, leading bullets,
+    # trailing dashes) so chosen fragments do not display half-quoted.
+    snippet = ' … '.join(f.strip(_EDGE_STRIP) for _, _, f in top)
 
     if len(snippet) > TARGET_CHARS * 2:
         snippet = snippet[:TARGET_CHARS * 2].rsplit(' ', 1)[0] + '…'
@@ -172,10 +190,44 @@ def summarise_doc(text: str, query_terms: set | frozenset) -> str:
 
 
 def parse_query(query: str) -> frozenset:
-    """Lowercase, strip punctuation, drop stopwords and 1-char terms."""
-    terms = set()
+    """Lowercase, normalise typographic apostrophes, strip edge
+    punctuation, drop stopwords and 1-char terms.
+
+    PRD-030: emit *variants* for terms that contain word-internal
+    apostrophes or hyphens so the doc-side strip-and-compare cycle
+    cannot lose recall. A query for "children's books" yields
+    {"children's", "childrens", "children", "books"} — the doc
+    word "children's" matches via either the apostrophe form or the
+    stripped form, and a sentence that uses just "children" still
+    scores.
+    """
+    terms: set[str] = set()
+    # Cap at 32 unique terms to bound a pathological query like
+    # "one's two's three's ... ten's" exploding the set.
+    CAP = 32
     for t in query.split():
-        t = t.lower().strip(string.punctuation)
-        if t and t not in STOPWORDS and len(t) > 1:
-            terms.add(t)
+        t = t.lower().translate(_APOS_NORM).strip(string.punctuation)
+        if not t or len(t) < 2 or t in STOPWORDS:
+            continue
+        terms.add(t)
+        # Apostrophe variants: "children's" -> +"childrens", +"children",
+        # also each piece around the apostrophe (so "d'Ivoire" yields
+        # "ivoire" as a useful per-piece term too).
+        if "'" in t:
+            stripped = t.replace("'", "")
+            if stripped and stripped not in STOPWORDS and len(stripped) > 1:
+                terms.add(stripped)
+            for piece in t.split("'"):
+                if piece and piece not in STOPWORDS and len(piece) > 1:
+                    terms.add(piece)
+        # Hyphen variants: "non-fiction" -> +"nonfiction", +"non", +"fiction".
+        if "-" in t:
+            joined = t.replace("-", "")
+            if joined and joined not in STOPWORDS and len(joined) > 1:
+                terms.add(joined)
+            for piece in t.split("-"):
+                if piece and piece not in STOPWORDS and len(piece) > 1:
+                    terms.add(piece)
+        if len(terms) >= CAP:
+            break
     return frozenset(terms)
