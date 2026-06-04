@@ -242,24 +242,18 @@ def build(journal_path: Path,
                       dt.timedelta(days=NEWS_REUSE_DAYS)).isoformat()
 
     summaries = None
-    event_keys: set[str] = set()
-    news_keys: set[str] = set()
     if summaries_store and summaries_map and summaries_store.exists() and summaries_map.exists():
         print(f"loading summaries store: {summaries_store}", flush=True)
         summaries = FlatStoreRO(summaries_store, summaries_map)
         if summaries.load():
-            for k in summaries._map.keys():
-                if k.endswith(":event"):
-                    event_keys.add(k)
-                elif k.endswith(":news"):
-                    news_keys.add(k)
-            print(f"  {len(event_keys):,} event-summary keys, "
-                  f"{len(news_keys):,} :news-summary keys",
-                  flush=True)
+            print(f"  {len(summaries._map):,} summary keys", flush=True)
         else:
             summaries = None
 
-    # Enrich each record.
+    # Enrich each record. The summary lookups go straight to the
+    # FlatStore _map dict (O(1) `in`) — no need for a precomputed
+    # set per suffix since we know the exact key shape per event.
+    smap = summaries._map if summaries is not None else {}
     n_with_event_summary = 0
     n_with_news_summary  = 0
     for r in fresh:
@@ -279,7 +273,7 @@ def build(journal_path: Path,
             # Primary: per-event summary.
             ek = f"{docno}:{ev_date}:event"
             body = None
-            if ek in event_keys:
+            if ek in smap:
                 body = summaries.get(ek)
                 if body:
                     r["summary_md"] = body
@@ -291,7 +285,7 @@ def build(journal_path: Path,
             if body is None and ev_date >= news_floor_iso:
                 qn = _query_norm_from_docno(docno)
                 nk = f"{qn}:news"
-                if nk in news_keys:
+                if nk in smap:
                     body = summaries.get(nk)
                     if body:
                         r["summary_md"] = body

@@ -40,6 +40,9 @@ DEFAULT_TRENDING_DIR = Path(os.environ.get(
 
 CATEGORIES = ("politics", "business", "tech", "sport",
               "science", "culture", "world", "other")
+# Pre-computed insertion-order priority so tie-breaks in
+# vote_from_wiki_categories() do not call CATEGORIES.index() per item.
+_CATEGORY_PRIORITY = {c: i for i, c in enumerate(CATEGORIES)}
 
 
 # ---------------------------------------------------------------------------
@@ -211,8 +214,8 @@ def vote_from_wiki_categories(cats: list[str]) -> tuple[str | None, int]:
     if not votes:
         return None, 0
     # Stable tie-break by bucket order (insertion order in CATEGORIES).
-    best = max(votes.items(), key=lambda kv: (kv[1],
-                                              -CATEGORIES.index(kv[0])))
+    best = max(votes.items(),
+               key=lambda kv: (kv[1], -_CATEGORY_PRIORITY[kv[0]]))
     return best[0], best[1]
 
 
