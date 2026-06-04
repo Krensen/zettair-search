@@ -1250,7 +1250,10 @@
       // results have had a moment to paint — gives the page a Google-like
       // "answer is composing" feel.
       const top = data.results[0];
-      const title = formatTitle(top.docno);
+      // PRD-030 #7: prefer the server-supplied title (preserves
+      // apostrophes etc. via the dbkey-bearing URL); fall back to
+      // docno-derived for older server responses.
+      const title = top.title || formatTitle(top.docno);
       const wikiUrl = wikiLink(top);
       const imgHtml = top.image_url
         ? `<img src="${esc(proxyImg(top.image_url))}" alt="${esc(title)}"
@@ -1347,7 +1350,9 @@
 
       // Results
       resultsList.innerHTML = data.results.map(r => {
-        const title = formatTitle(r.docno);
+        // PRD-030 #7: prefer server-supplied title (preserves
+        // apostrophes etc.); fall back to docno-derived.
+        const title = r.title || formatTitle(r.docno);
         const url = wikiLink(r);
         const crumb = `en.wikipedia.org › wiki › ${r.docno.replace(/_/g, ' ')}`;
         const thumb = r.image_url

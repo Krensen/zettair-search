@@ -613,6 +613,30 @@ async def _load_autosuggest():
         print(f"WARNING: autosuggest file not found: {AUTOSUGGEST_PATH}")
 
 
+def _title_from_url_or_docno(url: str, docno: str) -> str:
+    """Derive a display title that preserves URL-safe punctuation
+    (apostrophes, periods, parens, etc.). The docno is a safe_id with
+    those characters collapsed to '_'; the URL preserves them via the
+    dbkey (~23% of articles). Strip the trailing parenthetical
+    disambiguator ("(film)", "(album)") to match the existing
+    front-end formatTitle behaviour.
+
+    PRD-030 #7: previously the front-end derived the title from
+    docno alone, so "Putin's Palace" displayed as "Putin s Palace".
+    """
+    raw = ""
+    if url:
+        path = urllib.parse.urlsplit(url).path
+        if "/wiki/" in path:
+            raw = urllib.parse.unquote(path.rsplit("/wiki/", 1)[-1])
+    if not raw:
+        raw = docno
+    title = raw.replace("_", " ").strip()
+    # Strip "_(disambiguator)" suffix the way the existing frontend does.
+    title = re.sub(r"\s*\([^()]*\)\s*$", "", title)
+    return title or docno
+
+
 def enrich_results(results: list, query: str) -> tuple[list, dict]:
     """Attach url, snippet, and image. All sidecar stores are keyed by docno (safe_id).
 
@@ -648,6 +672,11 @@ def enrich_results(results: list, query: str) -> tuple[list, dict]:
             "score": r["score"],
             "docid": r["docid"],
             "docno": docno,
+            # PRD-030 #7: title derived from the dbkey-bearing URL so
+            # apostrophes / periods / parens survive (the docno
+            # collapses them to '_'). Frontend should prefer this
+            # field; falls back to docno-derived if absent.
+            "title": _title_from_url_or_docno(url, docno),
             "url": url,
             "snippet": snippet,
             "image_url": _images_store.get(docno),
