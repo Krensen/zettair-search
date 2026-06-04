@@ -347,3 +347,110 @@ step and iterate on it.
 3. **Abbreviation list maintenance.** A frozen set in code is the
    simplest. Worth pulling from a Wikipedia category at some point
    but not for v1.
+
+---
+
+## Addendum (2026-06-04, post-step-C deployment)
+
+Three follow-ups identified after live verification of steps A-C:
+
+### #7 Title display drops apostrophes and other URL-safe punctuation
+
+Observed: `https://zettair.io/search?q=Putin%27s%20Palace` returns
+result rows where the URL is correctly `…/Putin's_Palace` but the
+displayed title reads "Putin s Palace" — the apostrophe is gone in
+the docno form (Wikipedia's safe_id collapses non-alphanumeric chars
+to `_`), and the frontend reconstructs the title from the docno
+rather than from the dbkey-bearing URL.
+
+`server.py:enrich_results()` already has the canonical URL available
+per result via `_urls_store.get(docno)` — for the ~23% of articles
+where the dbkey differs from the safe_id, the URL preserves the
+apostrophe / period / parenthesis. The frontend's `formatTitle()`
+just doesn't use it.
+
+Two equivalent fixes:
+
+- **Frontend-side**: derive the title from `r.url` when the URL
+  contains characters that the docno cannot. Pros: zero server
+  change. Cons: every client (web, iOS PRD-028, future API consumers)
+  reimplements.
+- **Server-side**: add an explicit `title` field to the
+  `enrich_results` output, derived from the URL when one is in
+  `_urls_store`, else from the docno. Single source of truth.
+
+Lean **server-side**. Cleanest; iOS gets the fix for free; web
+frontend's `formatTitle` becomes `r.title || formatTitle(r.docno)`
+as a graceful fallback.
+
+### #8 Citation residue and quote-imbalance leak into snippets
+
+Observed: queries for "Putin khuylo" and "Putin's Kleptocracy" return
+snippets like `Putin khuylo!. , May 2014 "Putin …` and
+`...accusation that "Putin and his close colleagues have enriched
+themselves is now effectively proven" and "a courageous and…` — the
+content is correct prose mixed with citation-shaped residue (lone
+comma + date + dangling quote, or runs of multiply-quoted clauses
+that confuse the eye).
+
+The wiki markup itself (`{{}}`, `[[]]`, `'''`) has already been
+stripped upstream in the docstore. What survives is:
+
+- Floating dates and short stray phrases left over from removed
+  citation templates: `, May 2014`, `(2018)`, `(in Russian)`.
+- Odd-numbered quote counts: fragment opens `"` but doesn't close.
+- Sentences that start with `,` `;` `(` or a digit-year.
+
+Add a residue filter inside `_score_and_check`:
+
+- If the fragment, after edge-stripping, starts with one of
+  `,;:)(` or a digit followed by a year, reject (return 0).
+- If the count of `"` + `"` + `"` is odd, reject. (Already a
+  proxy for "something got cut in half".)
+- If the fragment contains a 3+ char run of pure punctuation
+  separators (`. , `, `". `, `).` patterns), and the run is in
+  the first 25% of the fragment, reject.
+
+Cost: ~10 lines, no algorithmic change.
+
+### #9 Bullet-marker regex misses `: *` and `, *` (the actual Wikipedia
+pattern)
+
+Observed: `Ozzy_Osbourne_discography` snippet still leads with
+`UK Singles Chart peak positions for Ozzy Osbourne singles as
+featured artist: *"Close My Eyes Forever": *"Hey Stoopid": ...` —
+the bullet items use `: *` as a separator, not `\s*`.
+
+Current `_RE_HARD_SPLIT` requires whitespace **before** the bullet:
+`(?<=\s)[*•·–—]\s+` matches `text * "Title"` but not `text: *"Title"`.
+Real Wikipedia export uses `:` and `,` as the separator more often
+than the space, because the bullet markers come from list-rendering
+fallback (e.g. table rows joined inline).
+
+Widen the regex to also accept `:` and `,` before the bullet:
+
+```python
+_RE_HARD_SPLIT = re.compile(
+    r'\n{2,}'
+    r'|(?<=[\s:,;])[*•·–—]\s*'  # bullet after whitespace OR punctuation
+    r'|\n[*•·]\s*'
+    r'|\s+[–—]\s+'
+)
+```
+
+Note the `\s*` (was `\s+`) after the bullet marker — Wikipedia text
+often immediately quotes after the bullet (`*"Title"`).
+
+Cost: 1-line regex change + verify on the Ozzy case.
+
+### Build estimate (addendum)
+
+| Step | Time |
+|---|---|
+| #7 (server-side title field) | 30 min |
+| #8 (residue filter) | 1 h |
+| #9 (bullet regex widening) | 15 min |
+| **Total** | **~2 h** |
+
+Ship as a single Step D PR — all three are small, contained, and
+non-interacting.

@@ -56,6 +56,21 @@ _RE_CITATION_FRAG = re.compile(
     r'|\bSitzungsberichte\b'
 )
 
+# PRD-030 #8: residue-shaped fragment detector. Catches the leftovers
+# from citation-template stripping that look like dates, dangling
+# bracketed phrases, or fragments that start mid-punctuation.
+# A fragment matching ANY of these is rejected from scoring outright.
+_RE_RESIDUE_LEADING = re.compile(
+    r'^[,;:)\]]'                       # starts with comma/semicolon/etc.
+    r'|^[A-Z][a-z]+\s+\d{4}\s*[",.]'   # "May 2014," / "March 1999."
+    r'|^[A-Z][a-z]+\s+\d{1,2},\s*\d{4}' # "April 5, 2020"
+)
+_RE_RESIDUE_DATE_ISLAND = re.compile(
+    # ". , Month YYYY ..." — a sentence end followed by a stray
+    # comma-led date phrase, classic citation residue.
+    r'[.!?]\s*,\s*[A-Z][a-z]+\s+\d{4}'
+)
+
 # Verb-like function words. A fragment without one is almost certainly
 # a title, heading, name, or citation fragment.
 _PROSE_VERBS = frozenset({
@@ -93,11 +108,16 @@ _RE_SENTENCE_SPLIT = re.compile(r'(?<=[.!?])\s+(?=[A-Z(])')
 # breaks, and standalone em-dash separators are NOT sentence ends but
 # they DO break fragments. Applied as a preprocessing pass before the
 # soft-split regex.
+#
+# PRD-030 #9: also catch ": *" and ", *" / "; *" — Wikipedia's docstore
+# export sometimes joins list items inline as `text: *"Item": *"Item"`
+# without surrounding whitespace, so the original "whitespace before
+# bullet" rule missed them.
 _RE_HARD_SPLIT = re.compile(
-    r'\n{2,}'                # paragraph break
-    r'|(?<=\s)[*•·–—]\s+'    # bullet marker after whitespace
-    r'|\n[*•·]\s*'           # bullet at line start
-    r'|\s+[–—]\s+'           # em-dash separator (with surrounding spaces)
+    r'\n{2,}'                  # paragraph break
+    r'|(?<=[\s:,;])[*•·–—]\s*' # bullet after whitespace OR punctuation
+    r'|\n[*•·]\s*'             # bullet at line start
+    r'|\s+[–—]\s+'             # em-dash separator (with surrounding spaces)
 )
 
 # PRD-030 #3: inline citation markers ("[12]", "[14a]") get stripped
@@ -246,6 +266,23 @@ def _score_and_check(fragment: str, query_terms: frozenset) -> float:
         return 0.0
 
     if _RE_CITATION_FRAG.search(fragment):
+        return 0.0
+
+    # PRD-030 #8: residue-shaped fragment filter. Patterns left over
+    # from upstream citation-template stripping leak into the docstore
+    # as stray dates and dangling phrases. Cheaper than trying to
+    # repair the docstore.
+    if _RE_RESIDUE_LEADING.match(fragment):
+        return 0.0
+    # Odd quote count is a strong "this got cut in half" signal.
+    # Count ASCII " and typographic " "; ignore curly apostrophes since
+    # those are word-internal.
+    quote_count = fragment.count('"') + fragment.count('“') + fragment.count('”')
+    if quote_count % 2 == 1:
+        return 0.0
+    # Date-island pattern (". , May 2014") in the first half of the
+    # fragment — a strong residue marker.
+    if _RE_RESIDUE_DATE_ISLAND.search(fragment[:len(fragment) // 2 + 25]):
         return 0.0
 
     return hits / len(words)
