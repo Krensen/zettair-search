@@ -454,3 +454,154 @@ Cost: 1-line regex change + verify on the Ozzy case.
 
 Ship as a single Step D PR — all three are small, contained, and
 non-interacting.
+
+---
+
+## Addendum (2026-06-05, steps E + F + G)
+
+Steps A-D shipped the tokenisation, sentence-splitting, residue-
+filter, and title-display fixes. Live verification surfaced a class
+of problems they do not address:
+
+**Symptom**: query `vladimir putin` against the Putin article
+returned a snippet led by `His grandfather, Spiridon Putin, was a
+personal cook to Vladimir Lenin and Joseph Stalin.` instead of the
+article's lede. The grandfather sentence is correct prose with two
+query hits, but it is not what a reader wants for a navigational
+query — the lede is.
+
+Root causes, in order:
+
+1. `wiki2trec.py`'s `clean()` collapsed all whitespace including
+   paragraph breaks, so the docstore was a single line. The
+   summariser could not see article structure; a "fragment" was
+   just whatever fell between sentence terminators with no notion
+   of where the lede stopped.
+2. Even with structure preserved, fragment scoring is `hits /
+   words`. The lede is a long, balanced sentence (~30 words, 2
+   hits → density 0.0645). Short body sentences with the same
+   query terms ("Putin is Russian Orthodox.", 4 words, 1 hit →
+   density 0.25) trivially win.
+3. The very first fragment of the docstore is the title-repeat
+   that `wiki2trec.py` emits as the article's first sentence
+   ("Vladimir Putin."). Below `MIN_FRAG_CHARS`, so it scores
+   zero — but it consumes fragment position 0, pushing the
+   lede to position 1 in the fragment list.
+
+Three structural fixes, layered:
+
+### Step E — paragraph-preserving `clean()` (in the `zettair` repo)
+
+`wiki2trec.py`: rewrote `clean()` to preserve `\n\n` paragraph
+breaks, convert section headings into paragraph breaks, and drop
+everything from the first terminator section heading onwards
+(References, External links, Notes, Further reading, etc.).
+
+`build_docstore.py`: rewrote `strip_wiki_markup()` to iterate
+*per-paragraph* — sentence-tokenise inside each paragraph, drop
+citation sentences, rejoin with paragraph breaks preserved.
+
+Net effect on the docstore: each article is now an
+`\n\n`-separated sequence of real paragraphs, mirroring the
+Wikipedia article structure. `summarise.py`'s
+`_RE_HARD_SPLIT` (from step #3 / #9) already treated `\n\n` as a
+hard fragment boundary, so step E gave it real paragraphs to
+boundary on.
+
+Cost: ~80 lines across two files. Requires a corpus rebuild on
+prod to take effect (the docstore body content changes); ~6 h
+wall time.
+
+### Step F — inverse-log positional boost (in `summarise.py`)
+
+Multiply each fragment's density by
+`(1 + LEAD_WEIGHT / log2(2 + position))`. With `LEAD_WEIGHT = 1.2`,
+position 0 gets a 2.2× boost, decaying to ~1.4× at position 5,
+~1.2× at position 30, ~1.1× at position 100. A genuinely dense
+later match can still win against a weak lede; near-ties go to
+the earlier fragment.
+
+Cost: one comprehension change in `summarise_doc`, one constant.
+No corpus rebuild.
+
+`LEAD_WEIGHT` started at 0.7 and was bumped to 1.2 after live
+verification showed the lede still losing to the grandfather case.
+The bump alone was not enough — see step G.
+
+### Step G — lede bonus on the first eligible fragment
+
+Step F's positional boost decays smoothly with position, which
+implicitly assumes "the lede is at position 0". In practice the
+title-repeat ("Vladimir Putin.") sits at position 0, scores zero,
+and the lede is at position 1 — getting only a 1.76× boost when
+we want it boosted more strongly.
+
+Step G: after the step-F score pass, find the smallest-position
+scored fragment (the *first eligible* fragment — i.e. the first
+fragment with a query hit) and replace its score with
+`raw_density * LEDE_BONUS`. With `LEDE_BONUS = 3.0`, the lede's
+raw 0.0645 density becomes 0.194 — beats the grandfather's
+0.143 × 1.247 = 0.178.
+
+The bonus applies to the first *eligible* fragment, not
+necessarily fragment 0, so it survives:
+
+- a title-repeat at position 0 (the Putin case);
+- a leading infobox residue fragment with no query terms;
+- any other pre-lede fragment that scores zero.
+
+Cost: ~10 lines in `summarise_doc`, one constant, plus widening
+the scored tuple from 3 to 4 fields to track raw density.
+
+### Why steps F and G coexist
+
+- Step F handles **ties between body fragments of similar density** —
+  earlier wins. It is a smooth gradient over the whole article.
+- Step G handles the **lede specifically** — gives it a large enough
+  bonus to beat short hit-dense body fragments. It is a single
+  point boost.
+
+Together: the lede always leads the snippet when there is one;
+remaining slots in the snippet go to the next-best fragments
+which step F gently biases toward the front of the article.
+
+### Diagnostic tool
+
+`tools/debug_summarise.py` reads the live docstore for a docno,
+runs `split_fragments` + `_score_and_check` on every fragment,
+prints position / length / density / boost / post-boost score,
+and shows what `summarise_doc` would pick. Used to diagnose the
+Putin case after step F shipped; recommended any time a snippet
+on prod looks wrong.
+
+```bash
+sudo -u zettair env $(systemctl show zettair-search -p Environment --value | \
+    tr ' ' '\n' | grep -E '^ZET_DOCSTORE=|^ZET_DOCMAP=') \
+  python3 /opt/zettair-search/tools/debug_summarise.py \
+    --docno Vladimir_Putin --query "vladimir putin"
+```
+
+### Tuning constants — what they are and what they do
+
+| Constant | Value | Effect |
+|---|---|---|
+| `LEAD_WEIGHT` | 1.2 | Step F positional boost strength. Pos 0 = 2.2×. |
+| `LEDE_BONUS` | 3.0 | Step G first-eligible fragment multiplier. |
+| `MIN_FRAG_CHARS` | 20 | Reject fragments below this length. |
+| `MAX_FRAG_SCORE_CHARS` | 240 | Score only the first 240 chars of long fragments. |
+| `SHOW_FRAGS` | 3 | Number of fragments in the final snippet. |
+
+Both `LEAD_WEIGHT` and `LEDE_BONUS` should rarely need changing.
+Bump only if a curated eval shows systematic regressions.
+
+### Open / deferred
+
+- **Hand-curated 30-pair eval** (per the original §Quality
+  measurement) — still pending. The qualitative read on prod is
+  "generally a lot better"; a measured eval would catch any
+  regressions from steps E/F/G.
+- **Step F + G interaction at the head of the article**: when the
+  lede is at position 0 (e.g. Einstein), step G replaces step F's
+  score for that fragment. Verified the Einstein lede still leads.
+  Other position-0-lede articles should be fine for the same
+  reason.
