@@ -43,7 +43,7 @@ MAX_FRAG_SCORE_CHARS = 240
 # later paragraphs that mentioned the query terms more densely but
 # were less informative as a snippet. The lede is almost always the
 # right answer for a navigational query.
-LEAD_WEIGHT = 0.7
+LEAD_WEIGHT = 1.2
 
 # Stop words
 STOPWORDS = {
