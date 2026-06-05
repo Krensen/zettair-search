@@ -34,16 +34,24 @@ MAX_FRAG_SCORE_CHARS = 240
 
 # PRD-030 step F: positional boost. Multiply each fragment's density
 # by (1 + LEAD_WEIGHT / log2(2 + position)) so earlier fragments win
-# ties and near-ties. Fragment 0 gets a 1 + LEAD_WEIGHT boost (1.7×
-# at the default); the boost decays slowly so genuinely dense matches
+# ties and near-ties. Boost decays slowly so genuinely dense matches
 # deeper in the doc can still win against a weak lede.
-#
-# Why this exists: the Vladimir Putin article's lede ("Vladimir
-# Vladimirovich Putin is a Russian politician...") was losing to
-# later paragraphs that mentioned the query terms more densely but
-# were less informative as a snippet. The lede is almost always the
-# right answer for a navigational query.
 LEAD_WEIGHT = 1.2
+
+# PRD-030 step G: lede bonus. The first fragment with a query hit
+# (its "eligibility rank 0") is the lede in almost every Wikipedia
+# article — the title-repeat at position 0 is usually too short to
+# score, so the lede sits at position 1 and the step-F positional
+# boost alone is not enough to beat short, hit-dense fragments from
+# elsewhere in the body (e.g. "Putin is Russian Orthodox.").
+#
+# Multiply the first-eligible fragment's density by LEDE_BONUS as
+# a separate, larger boost than the position curve gives. With
+# LEDE_BONUS = 3.0, Putin's lede (density 0.0645) beats the
+# "His grandfather, Spiridon Putin..." fragment (density 0.143 *
+# 1.247 = 0.178) at 0.0645 * 3.0 = 0.194. Higher-density bodies
+# can still win the *second* slot.
+LEDE_BONUS = 3.0
 
 # Stop words
 STOPWORDS = {
@@ -315,7 +323,7 @@ def summarise_doc(text: str, query_terms: set | frozenset) -> str:
     # PRD-030 step F: multiply density by an inverse-log positional
     # boost so earlier fragments win ties — the lede is almost always
     # the right snippet for a navigational query.
-    scored = [(s * (1.0 + LEAD_WEIGHT / math.log2(2 + i)), i, f)
+    scored = [(s * (1.0 + LEAD_WEIGHT / math.log2(2 + i)), i, f, s)
               for i, f in enumerate(fragments)
               for s in [_score_and_check(f, query_terms)]
               if s > 0.0]
@@ -324,13 +332,22 @@ def summarise_doc(text: str, query_terms: set | frozenset) -> str:
         # No query terms found — return the first fragment or two.
         return ' '.join(fragments[:2])[:TARGET_CHARS]
 
+    # PRD-030 step G: lede bonus. The first eligible fragment (smallest
+    # position with a query hit) is almost always the lede; the title-
+    # repeat at fragment 0 is too short to score. Replace its step-F
+    # score with raw_density * LEDE_BONUS so the lede beats short,
+    # hit-dense body fragments.
+    lede_idx = min(range(len(scored)), key=lambda k: scored[k][1])
+    _, lede_pos, lede_frag, lede_density = scored[lede_idx]
+    scored[lede_idx] = (lede_density * LEDE_BONUS, lede_pos, lede_frag, lede_density)
+
     # Take top SHOW_FRAGS by score, then re-order by original position
     # so the snippet reads naturally.
     top = sorted(scored, key=lambda x: -x[0])[:SHOW_FRAGS]
     top.sort(key=lambda x: x[1])  # by position
     # PRD-030 #4: strip stray edge punctuation (quotes, leading bullets,
     # trailing dashes) so chosen fragments do not display half-quoted.
-    snippet = ' … '.join(f.strip(_EDGE_STRIP) for _, _, f in top)
+    snippet = ' … '.join(f.strip(_EDGE_STRIP) for _, _, f, _ in top)
 
     if len(snippet) > TARGET_CHARS * 2:
         snippet = snippet[:TARGET_CHARS * 2].rsplit(' ', 1)[0] + '…'
