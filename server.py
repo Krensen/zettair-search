@@ -110,6 +110,12 @@ SUMMARIES_STORE_PATH = os.environ.get("ZET_SUMMARIES_STORE", os.path.join(_wiki_
 SUMMARIES_MAP_PATH   = os.environ.get("ZET_SUMMARIES_MAP",   os.path.join(_wiki_dir, "summaries.map"))
 # PRD-020: trending pages. Written by tools/fetch_trending.py on a timer.
 TRENDING_CURRENT_PATH = os.environ.get("ZET_TRENDING_CURRENT", "/mnt/wikipedia-source/trending/current.json")
+# PRD-018: summary queue dirs (used by /health/news only). The producer
+# drops jobs into priority/ + pending/; the Mac Mini worker drains
+# them into done/; the installer flushes done/ into the FlatStore and
+# moves into installed/. Errors land in errors/. Server only stats
+# these to report a health snapshot.
+SUMMARIES_DIR_PATH = os.environ.get("ZET_SUMMARIES_DIR", "/mnt/wikipedia-source/summaries")
 # PRD-025: related entities. Built offline at index-rebuild time by
 # zettair/wikipedia/build_related.py. FlatStore keyed by docno; value
 # is a JSON array of [target_docno, score] pairs.
@@ -993,6 +999,133 @@ async def trending(n: int = Query(8, ge=1, le=50)):
         "generated_at": payload.get("generated_at"),
         "items": out,
     }
+
+
+def _dir_stats(path: str) -> dict:
+    """Cheap snapshot of a queue dir: file count + newest entry age in
+    minutes. Returns {count, newest_age_min} or {error} if the dir is
+    missing/unreadable. Used by /health/news only."""
+    try:
+        entries = os.listdir(path)
+    except OSError as e:
+        return {"error": str(e)}
+    count = 0
+    newest_mtime = 0.0
+    for name in entries:
+        # Skip dotfiles/markers
+        if name.startswith("."):
+            continue
+        try:
+            st = os.stat(os.path.join(path, name))
+        except OSError:
+            continue
+        count += 1
+        if st.st_mtime > newest_mtime:
+            newest_mtime = st.st_mtime
+    if newest_mtime == 0.0:
+        return {"count": count, "newest_age_min": None}
+    age_min = (time.time() - newest_mtime) / 60.0
+    return {"count": count, "newest_age_min": round(age_min, 1)}
+
+
+@app.get("/health/news")
+async def health_news():
+    """Single-URL health probe for the news pipeline.
+
+    Designed to be bookmarkable. No auth: nothing sensitive, just
+    mtimes and counts. Use when you are not at the box and want to
+    know whether trending is fetching and the Mac Mini summariser
+    is producing.
+
+    Heuristics, not authoritative:
+      - trending.fresh: current.json mtime < 90 min (timer cadence
+        is 60 min, so >90 min = a fetcher run was missed).
+      - mac_mini_likely_alive: summaries.store written in the last
+        2 h OR something in done/ that the installer has not yet
+        drained. If both queues are empty and the store is stale,
+        ambiguous (could be no work, could be Mac Mini dead) — the
+        signal field explains.
+    """
+    now = time.time()
+    out = {"as_of": _ts()}
+
+    # --- Trending ---------------------------------------------------------
+    trending = {}
+    try:
+        st = os.stat(TRENDING_CURRENT_PATH)
+        trending["age_min"] = round((now - st.st_mtime) / 60.0, 1)
+    except FileNotFoundError:
+        trending["age_min"] = None
+    payload = _read_trending()
+    trending["generated_at"] = payload.get("generated_at")
+    items = payload.get("items", [])
+    trending["items_total"] = len(items)
+    sources: dict = {}
+    items_with_event = 0
+    for it in items:
+        sources[it.get("source", "spike")] = sources.get(it.get("source", "spike"), 0) + 1
+        if it.get("event_paragraph") or it.get("event_date"):
+            items_with_event += 1
+    trending["sources"] = sources
+    trending["items_with_event"] = items_with_event
+    trending["fresh"] = (trending["age_min"] is not None
+                        and trending["age_min"] < 90)
+    out["trending"] = trending
+
+    # --- Summaries FlatStore ---------------------------------------------
+    summaries = {}
+    try:
+        st = os.stat(SUMMARIES_STORE_PATH)
+        summaries["store_age_min"] = round((now - st.st_mtime) / 60.0, 1)
+    except FileNotFoundError:
+        summaries["store_age_min"] = None
+    n_news = 0
+    n_bio = 0
+    # _summaries_store._map is loaded once at startup; iterate keys here
+    # for the entry counts. Cheap (a few hundred thousand entries max).
+    for k in _summaries_store._map.keys():
+        if k.endswith(":news"):
+            n_news += 1
+        else:
+            n_bio += 1
+    summaries["news_entries_total"] = n_news
+    summaries["biographical_entries_total"] = n_bio
+    out["summaries"] = summaries
+
+    # --- Queue dirs (only stat what we can read) -------------------------
+    queue = {}
+    for sub in ("priority", "pending", "done", "installed", "errors"):
+        queue[sub] = _dir_stats(os.path.join(SUMMARIES_DIR_PATH, sub))
+    out["queue"] = queue
+
+    # --- Mac Mini heuristic ---------------------------------------------
+    # The clearest single signal: when did the FlatStore last get a
+    # write (installer touches it whenever it drains done/)? The
+    # installer runs every 5 min, so a recent store mtime means
+    # something landed recently. Backup signal: newest done/ entry.
+    store_age = summaries.get("store_age_min")
+    done_age = queue.get("done", {}).get("newest_age_min")
+    if store_age is not None and store_age < 120:
+        alive = True
+        signal = f"summaries.store updated {store_age} min ago"
+    elif done_age is not None and done_age < 120:
+        alive = True
+        signal = f"newest done/ entry {done_age} min ago (installer pending)"
+    else:
+        priority_count = queue.get("priority", {}).get("count", 0) or 0
+        pending_count = queue.get("pending", {}).get("count", 0) or 0
+        if priority_count == 0 and pending_count == 0:
+            alive = None  # ambiguous
+            signal = ("no work in queue and no recent activity — could be "
+                      "idle (rail thin) or Mac Mini down")
+        else:
+            alive = False
+            signal = (f"queue has {priority_count + pending_count} jobs but "
+                      f"no recent done/ or store activity — Mac Mini likely stuck")
+    out["mac_mini_likely_alive"] = alive
+    out["mac_mini_signal"] = signal
+
+    return out
 
 
 _THUMB_SIZE_RE = re.compile(r"/(\d+)px-")
