@@ -11,6 +11,7 @@ Imported by server.py and called inline from enrich_results().
 Public entry points: parse_query(query_str), summarise_doc(text, query_terms).
 """
 
+import math
 import re
 import string
 
@@ -30,6 +31,19 @@ MIN_FRAG_CHARS = 20
 # by accumulating incidental hits across its full length. Score the
 # prefix only; the full fragment still gets displayed.
 MAX_FRAG_SCORE_CHARS = 240
+
+# PRD-030 step F: positional boost. Multiply each fragment's density
+# by (1 + LEAD_WEIGHT / log2(2 + position)) so earlier fragments win
+# ties and near-ties. Fragment 0 gets a 1 + LEAD_WEIGHT boost (1.7×
+# at the default); the boost decays slowly so genuinely dense matches
+# deeper in the doc can still win against a weak lede.
+#
+# Why this exists: the Vladimir Putin article's lede ("Vladimir
+# Vladimirovich Putin is a Russian politician...") was losing to
+# later paragraphs that mentioned the query terms more densely but
+# were less informative as a snippet. The lede is almost always the
+# right answer for a navigational query.
+LEAD_WEIGHT = 0.7
 
 # Stop words
 STOPWORDS = {
@@ -298,7 +312,11 @@ def summarise_doc(text: str, query_terms: set | frozenset) -> str:
         return text[:TARGET_CHARS]
 
     # Single pass: score + prose-filter every fragment.
-    scored = [(s, i, f) for i, f in enumerate(fragments)
+    # PRD-030 step F: multiply density by an inverse-log positional
+    # boost so earlier fragments win ties — the lede is almost always
+    # the right snippet for a navigational query.
+    scored = [(s * (1.0 + LEAD_WEIGHT / math.log2(2 + i)), i, f)
+              for i, f in enumerate(fragments)
               for s in [_score_and_check(f, query_terms)]
               if s > 0.0]
 
