@@ -452,9 +452,29 @@ if [ ! -f "$TREC_FILE" ]; then
     as_zettair python3 "$WIKI_DIR/wiki2trec.py" \
         "$BZ2_FILE" "$TREC_FILE" --titles "$TITLES_FILE"
     log "TREC file written to $TREC_FILE"
+    # New TRECs from wiki2trec already have <DISPLAY_TITLE> +
+    # stripped <TITLE>; skip the migration step below.
+    as_zettair touch "$VOLUME/.title-disambig-stripped"
 else
     skipped trec "already exists"
     log "TREC file already exists — skipping wiki2trec.py."
+fi
+
+### ── 9a. PRD-031 followup: strip disambiguator from indexed TITLE ──────────
+# One-shot migration for TRECs built before wiki2trec started emitting
+# <DISPLAY_TITLE>. Rewrites <TITLE> to drop "(disambiguator)" and adds
+# a sibling <DISPLAY_TITLE> with the full title so the display sidecar
+# can recover it. Gated on a marker file so we only run once.
+
+TITLE_STRIP_MARKER="$VOLUME/.title-disambig-stripped"
+if [ -f "$TREC_FILE" ] && [ ! -f "$TITLE_STRIP_MARKER" ]; then
+    decided trec-title-strip "marker absent; one-shot migration"
+    log "Rewriting <TITLE> tags in $TREC_FILE (one-shot, a few minutes)..."
+    as_zettair python3 -u "$WIKI_DIR/strip_trec_title_disambig.py" "$TREC_FILE"
+    as_zettair touch "$TITLE_STRIP_MARKER"
+    log "TREC <TITLE> migration complete; marker at $TITLE_STRIP_MARKER"
+elif [ -f "$TITLE_STRIP_MARKER" ]; then
+    skipped trec-title-strip "marker present"
 fi
 
 ### ── 10. Keep / delete bz2 (zettair) ───────────────────────────────────────
