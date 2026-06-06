@@ -347,19 +347,44 @@ def _load_related_classes() -> None:
         print(f"WARNING: couldn't load {RELATED_CLASS_PATH}: {e}", flush=True)
 
 
+def _related_key_from_url(docno: str) -> str | None:
+    """The related store + entity_class.json were built with canonical
+    Wikipedia URL-slug docnos (e.g. `George_W._Bush`). The TREC index
+    uses safe_id form (`George_W__Bush`) — punctuation collapses to `_`.
+    For the ~23% of articles where they differ, the URL store has the
+    canonical slug; recover it here. Returns None if no URL or no
+    parseable slug. PRD-032 has a follow-up to rebuild the related
+    store keyed by safe_id; this lookup-time fallback is a stopgap."""
+    url = _urls_store.get(docno)
+    if not url:
+        return None
+    # Last path component of the URL is the canonical slug.
+    slug = url.rsplit("/", 1)[-1]
+    return urllib.parse.unquote(slug) if slug else None
+
+
 def _related_for(docno: str, n: int = 8) -> tuple[list[dict], str | None]:
     """Return (items, source_class). Items is up to `n` dicts each
     with docno + title + score. Empty list if no related data."""
     if not docno:
         return [], None
     blob = _related_store.get(docno)
+    related_key = docno
+    if not blob:
+        # Fallback for the index/related docno format mismatch on
+        # punctuated titles (George_W__Bush vs George_W._Bush).
+        alt = _related_key_from_url(docno)
+        if alt and alt != docno:
+            blob = _related_store.get(alt)
+            if blob:
+                related_key = alt
     if not blob:
         return [], None
     try:
         raw = json.loads(blob)
     except json.JSONDecodeError:
         return [], None
-    src_class = _related_class.get(docno)
+    src_class = _related_class.get(related_key)
     items = []
     for entry in raw[:n]:
         try:
