@@ -700,7 +700,10 @@
       max-width: 620px;
       display: flex;
       gap: 16px;
-      align-items: center;
+      /* Top-align text + thumbnail. Required so the pill (anchored
+         at top: 0 of .result-item) sits next to the source row, not
+         above it. Visually: thumb top edge flush with source row. */
+      align-items: flex-start;
       /* Anchor for .result-corner so the pill right-edge aligns to the
          card's right edge, not to the inner text column (which shrinks
          when a thumbnail is present, leaving pills visually ragged). */
