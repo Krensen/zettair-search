@@ -701,14 +701,19 @@
       display: flex;
       gap: 16px;
       align-items: center;
+      /* Anchor for .result-corner so the pill right-edge aligns to the
+         card's right edge, not to the inner text column (which shrinks
+         when a thumbnail is present, leaving pills visually ragged). */
+      position: relative;
     }
 
-    .result-text { flex: 1; min-width: 0; position: relative; }
+    .result-text { flex: 1; min-width: 0; }
 
     /* PRD-027 (V7): corner pill carrying difficulty-dot + reading time.
-       Anchored to the top-right of .result-text so the title can break
-       lines underneath it. Leaves room (padding-right) on the source/
-       title rows so the pill never overlaps. */
+       Anchored to the top-right of .result-item (the outer card) so
+       the right edges line up regardless of whether a thumbnail is
+       present. Leaves room (padding-right) on the source/title rows
+       so the pill never overlaps the text underneath. */
     .result-corner {
       position: absolute;
       top: 0;
@@ -1365,8 +1370,8 @@
         const sourceClass = cornerPill ? 'result-source has-corner' : 'result-source';
         return `
           <div class="result-item">
+            ${cornerPill}
             <div class="result-text">
-              ${cornerPill}
               <div class="${sourceClass}">
                 <img class="result-favicon"
                   src="https://www.google.com/s2/favicons?domain=en.wikipedia.org&sz=64" alt="">
