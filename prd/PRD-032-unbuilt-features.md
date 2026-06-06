@@ -32,6 +32,7 @@ conversation up to that point.
 | Per-field IDF (`ZET_FIELD_IDF=on`) | PRD-019 M5 | Currently shared corpus IDF across fields. |
 | Additive freshness boost: trending titles get a small BM25 add | PRD-020 M6 | Same shape as click-prior. Would address `iran` → current-events surfacing. |
 | Related-entity graph as a ranking signal | PRD-025 M8 | The graph already exists; not yet wired into scoring. |
+| Rebuild related-store + entity_class.json with safe_id docnos | In-session (2026-06-05) | The stores are keyed with URL-slug docnos (e.g. `George_W._Bush`) but the index uses safe_id form (`George_W__Bush`). Server has a URL-store fallback today; permanent fix is a corpus-rebuild-aligned rekey of build_entity_set.py / build_link_graph.py / build_related.py output. |
 | α sensitivity sweep for `ZET_CLICK_ALPHA` | PRD-006 | Currently 0.05, eyeballed. |
 
 ## Search recall
