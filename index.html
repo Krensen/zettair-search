@@ -710,16 +710,18 @@
     }
 
     /* PRD-027 (V7): corner pill carrying difficulty-dot + reading time.
-       Anchored to the top-right of .result-text. Result-text width
-       varies with thumbnail presence (92px thumb + 16px gap eats into
-       the 620px card), so on no-thumb rows we shift the pill left by
-       108px so its x-position matches with-thumb rows. Leaves room
-       (padding-right) on the source/title rows so the pill never
-       overlaps the text underneath. */
+       Pinned to the right edge of the 620px card on every row so all
+       pills column-align regardless of thumbnail presence. .result-text
+       is the positioning context. With thumb: .result-text ends 108px
+       short of the card edge (92px thumb + 16px gap), so right: -108px
+       pushes the pill out to the card edge. No-thumb: .result-text
+       fills the card, so right: 0 already reaches the card edge.
+       Vertical: top: 0 of .result-text keeps the pill next to the
+       source row across both cases. */
     .result-corner {
       position: absolute;
       top: 0;
-      right: 0;
+      right: -108px;
       display: inline-flex;
       align-items: center;
       gap: 6px;
@@ -731,11 +733,8 @@
       color: #5f6368;
       user-select: none;
     }
-    /* No-thumb rows: text-column extends 108px further right (no thumb
-       + gap eating space). Push the pill left by that amount so its
-       x-position matches the with-thumb rows. */
     .result-item.no-thumb .result-corner {
-      right: 108px;
+      right: 0;
     }
     /* Harvey-ball difficulty indicator. ¼ / ½ / ¾ fills via
        conic-gradient; consistent grey palette so the symbol reads
