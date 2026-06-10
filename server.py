@@ -882,12 +882,14 @@ def _read_trending() -> dict:
     return _trending_cache["payload"]
 
 
-# PRD-021: don't serve a news summary whose paragraph is older than
-# this. Must be >= the producer's EVENT_FRESHNESS_DAYS (currently 30,
-# tools/fetch_trending.py) — otherwise the producer generates summaries
-# the server immediately refuses to serve. 30 keeps us in sync; if we
-# later tighten the producer back to 14d, tighten this too.
-STALE_NEWS_DAYS_SERVE = 30
+# PRD-021: don't serve a news summary whose event is older than this.
+# 7 matches the quality filter's headline-freshness window AND the
+# producer's NEWS_MAX_EVENT_AGE_DAYS (tools/build_news_summary_jobs.py)
+# — the producer stops enqueueing jobs past that age, so the two stay
+# in sync: nothing gets generated that this gate would refuse. An
+# "In the news" panel older than a week reads as broken next to a
+# currently-spiking chip; beyond it we fall through to biographical.
+STALE_NEWS_DAYS_SERVE = 7
 
 # Grace window after a query drops off the spike rail. News spikes are
 # bursty — articles dip below the spike threshold for a sample or two
