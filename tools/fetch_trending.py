@@ -142,6 +142,19 @@ NEWS_CACHE_DIR          = TRENDING_DIR / "news_cache"
 # wrong-entity drift in practice.
 NEWS_QUERY_QUALIFIER    = ""
 
+# Freshness-aware source pick: a Wikipedia event paragraph that
+# qualifies under EVENT_FRESHNESS_DAYS can still be stale relative to
+# the story — editors stop updating, the paragraph hash freezes, and
+# the summary stays days behind a still-spiking query (Tom Steyer,
+# 2026-06-09). When the paragraph's event_date is at least
+# STALE_EVENT_DAYS old AND Google News has a headline at least
+# SWAP_FRESHER_BY_DAYS newer than it, the headline synthesis replaces
+# the paragraph. Both-sources-old (a slow-moving story) keeps the
+# Wikipedia prose. event_date is day-granular, so thresholds are in
+# whole days; 2 avoids timezone fuzz around "yesterday".
+STALE_EVENT_DAYS        = int(os.environ.get("ZET_STALE_EVENT_DAYS", "2"))
+SWAP_FRESHER_BY_DAYS    = 1
+
 # -- PRD-026: quality filters -----------------------------------------------
 # Applied to the union of all candidate sources (spike + Google News
 # top-stories + Wikipedia ITN). Drops noise before items reach the rail.
@@ -1062,6 +1075,19 @@ def _prune_news_cache(max_age_days: int = 7) -> int:
     return n
 
 
+def newest_headline_date(headlines: list[dict]) -> dt.date | None:
+    """Date of the most recent headline, or None if none parse.
+    _parse_news_rss sorts newest-first, but max() here keeps us
+    correct if a caller ever passes an unsorted list."""
+    dates = []
+    for h in headlines:
+        try:
+            dates.append(dt.datetime.fromisoformat(h["pub_date"]).date())
+        except (KeyError, ValueError):
+            continue
+    return max(dates) if dates else None
+
+
 def synthesise_news_paragraph(display_title: str, headlines: list[dict]) -> str | None:
     """Build an event_paragraph-equivalent from a list of Google News
     headlines. Returned string is shaped like a Wikipedia paragraph
@@ -1381,6 +1407,7 @@ def apply_specificity_gate(items: list[dict]) -> list[dict]:
     n_checked = 0
     n_with_para_wiki = 0
     n_with_para_rss = 0
+    n_swapped_stale = 0
     n_without_para = 0
     n_dropped_fetch = 0
     for it in items[:MAX_CANDIDATES_TO_GATE]:
@@ -1393,29 +1420,47 @@ def apply_specificity_gate(items: list[dict]) -> list[dict]:
         if wt is None:
             n_dropped_fetch += 1
             continue
+        query = it.get("query") or it.get("title", "").lower()
+        display_title = it.get("title") or query.title()
         ev = find_event_paragraph(wt, today)
         if ev is not None:
             # Path 1: Wikipedia has a recent dated event paragraph.
-            it["event_paragraph"]   = ev["paragraph"]
-            it["event_date"]        = ev["event_date"]
-            it["event_specificity"] = ev["specificity"]
-            it["event_source"]      = "wikipedia"
-            n_with_para_wiki += 1
+            # Wikipedia wins by default, but a paragraph whose newest
+            # date has gone stale while Google News moved on gets
+            # swapped for the headline synthesis — the summary's
+            # freshness should be bounded by the news, not by
+            # Wikipedia editor activity.
+            swapped = False
+            try:
+                ev_date = dt.date.fromisoformat(ev["event_date"])
+            except ValueError:
+                ev_date = None
+            if ev_date is not None and (today - ev_date).days >= STALE_EVENT_DAYS:
+                headlines = fetch_news_headlines_cached(query, today=today)
+                newest = newest_headline_date(headlines)
+                if newest is not None and (newest - ev_date).days >= SWAP_FRESHER_BY_DAYS:
+                    para = synthesise_news_paragraph(display_title, headlines)
+                    if para is not None:
+                        it["event_paragraph"] = para
+                        it["event_date"]      = newest.isoformat()
+                        it["event_source"]    = "news_rss"
+                        n_swapped_stale += 1
+                        swapped = True
+            if not swapped:
+                it["event_paragraph"]   = ev["paragraph"]
+                it["event_date"]        = ev["event_date"]
+                it["event_specificity"] = ev["specificity"]
+                it["event_source"]      = "wikipedia"
+                n_with_para_wiki += 1
         else:
             # Path 2 (PRD-022): try Google News RSS as a fallback.
-            query = it.get("query") or it.get("title", "").lower()
-            display_title = it.get("title") or query.title()
             headlines = fetch_news_headlines_cached(query, today=today)
             para = synthesise_news_paragraph(display_title, headlines)
             if para is not None:
                 # Use the latest headline as event_date.
-                try:
-                    latest = max(dt.datetime.fromisoformat(h["pub_date"])
-                                 for h in headlines).date().isoformat()
-                except (KeyError, ValueError):
-                    latest = today.isoformat()
+                latest = newest_headline_date(headlines)
                 it["event_paragraph"] = para
-                it["event_date"]      = latest
+                it["event_date"]      = (latest or today).isoformat()
                 it["event_source"]    = "news_rss"
                 n_with_para_rss += 1
             else:
@@ -1430,6 +1475,7 @@ def apply_specificity_gate(items: list[dict]) -> list[dict]:
         "checked": n_checked,
         "with_para_wiki": n_with_para_wiki,
         "with_para_rss": n_with_para_rss,
+        "swapped_stale_wiki": n_swapped_stale,
         "without_para": n_without_para,
         "dropped_fetch": n_dropped_fetch,
         "kept": len(kept),
@@ -1521,6 +1567,7 @@ def recompute_and_write() -> None:
         log(f"specificity gate: checked={gate_stats['checked']} kept={gate_stats['kept']} "
             f"with_para_wiki={gate_stats['with_para_wiki']} "
             f"with_para_rss={gate_stats['with_para_rss']} "
+            f"swapped_stale_wiki={gate_stats['swapped_stale_wiki']} "
             f"without_para={gate_stats['without_para']} "
             f"dropped_fetch={gate_stats['dropped_fetch']}")
     else:

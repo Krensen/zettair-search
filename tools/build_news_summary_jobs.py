@@ -43,6 +43,10 @@ TRENDING_CURRENT = Path(os.environ.get(
     "/mnt/wikipedia-source/trending/current.json",
 ))
 NEWS_REFRESH_HOURS = int(os.environ.get("ZET_NEWS_REFRESH_HOURS", "48"))
+# Don't enqueue a job whose event_date is already older than this —
+# the server refuses to serve news panels beyond STALE_NEWS_DAYS_SERVE
+# (server.py, same value), so the Mac Mini cycles would be wasted.
+NEWS_MAX_EVENT_AGE_DAYS = int(os.environ.get("ZET_NEWS_MAX_EVENT_AGE_DAYS", "7"))
 
 # Per-query record of "what event_paragraph hash did we last enqueue for
 # this query". Lets us detect when Wikipedia editors have updated the
@@ -198,13 +202,23 @@ def main() -> None:
     log(f"loaded {len(items)} trending items from {args.current}")
 
     source_hashes = load_source_hashes()
+    today = dt.datetime.now(dt.UTC).date()
     n_enqueued = n_skipped_no_para = n_skipped_existing = n_skipped_pending = 0
-    n_refreshed_by_hash = 0
+    n_skipped_stale_event = n_refreshed_by_hash = 0
     for it in items:
         para = it.get("event_paragraph")
         if not para:
             n_skipped_no_para += 1
             continue
+        ev_date_s = it.get("event_date")
+        if ev_date_s:
+            try:
+                event_age = (today - dt.date.fromisoformat(ev_date_s)).days
+            except ValueError:
+                event_age = None
+            if event_age is not None and event_age > NEWS_MAX_EVENT_AGE_DAYS:
+                n_skipped_stale_event += 1
+                continue
         query = it.get("query", "")
         query_norm = query.strip().lower()
         if not query_norm:
@@ -240,6 +254,7 @@ def main() -> None:
     log(
         f"done: enqueued={n_enqueued} "
         f"skipped_no_para={n_skipped_no_para} "
+        f"skipped_stale_event={n_skipped_stale_event} "
         f"skipped_existing_fresh={n_skipped_existing} "
         f"skipped_already_pending={n_skipped_pending} "
         f"refreshed_by_hash_change={n_refreshed_by_hash}"
