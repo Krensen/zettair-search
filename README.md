@@ -290,6 +290,44 @@ These cadences are deliberately faster than the original PRD-020/021 defaults (w
 - **UI is plain `index.html`** — no build step. Look for inline JS at the bottom; CSS at the top. Result-card layout: title row, then a single corner-pill in the top-right with Harvey-ball + reading-time, then snippet with an inline `cite` text-link at the end.
 - **`object-position: center top`** on result + KP thumbnails — Wikipedia infobox portraits frame the subject head near the top of the image, so default-centred crop chopped heads off.
 - **The iOS app exists** (PRD-028). Server changes must keep the documented `/search`, `/suggest`, `/api/trending`, `/api/related`, `/click` shapes stable. New fields are fine; renaming or removing existing fields breaks the app silently. PRD-028 includes a "server-side handoff log" with open + closed asks.
+- **Result-card pill is on the title row** (since 2026-06-05 / PR #29). Pill renders inside `.title-row` via `margin-left: auto`. Thumbs are top-anchored (`align-items: flex-start` on `.result-item`) so pill-to-thumb spacing stays constant across rows of varying snippet length. No absolute positioning. If you move the pill, keep this constraint in mind — earlier iterations using `position: absolute` produced ragged horizontal alignment on no-thumb rows.
+- **Snippet quality tuning constants** (in `summarise.py`): `LEAD_WEIGHT = 1.2` (positional boost — fragment 0 gets 2.2x), `LEDE_BONUS = 3.0` (first-eligible fragment gets density * 3.0), `MIN_FRAG_CHARS = 20`, `MAX_FRAG_SCORE_CHARS = 240`, `SHOW_FRAGS = 3`. Tune carefully — both lede knobs were calibrated against the Putin debug-tool output. See PRD-030 addendum for the layered rationale.
+
+---
+
+## Remote diagnostics
+
+- **`/health/news`** — single bookmarkable URL: `https://zettair.io/health/news`. Returns JSON with trending freshness, summaries store mtime + entry counts, queue snapshots (`priority/pending/done/installed/errors` with counts and newest-entry ages), and a Mac Mini liveness heuristic (`mac_mini_likely_alive: bool | null`, `mac_mini_signal: <string>`). Use when you are not at the box and want to know whether the news pipeline is alive.
+- **`tools/debug_summarise.py`** — diagnose why a snippet on prod looks wrong. Reads the live docstore for a docno, runs `split_fragments` + `_score_and_check` on every fragment, prints position / length / density / boost / post-boost score, shows what `summarise_doc` would pick. Runs as `zettair` (needs volume read access):
+  ```
+  sudo -u zettair env $(systemctl show zettair-search -p Environment --value | tr ' ' '\n' | \
+      grep -E '^ZET_DOCSTORE=|^ZET_DOCMAP=') \
+    python3 /opt/zettair-search/tools/debug_summarise.py \
+      --docno Vladimir_Putin --query "vladimir putin"
+  ```
+
+---
+
+## Long-running operations on prod (rebuilds that survive SSH disconnects)
+
+`setup.sh` runs synchronously — if the foreground bash dies (SSH disconnect, GHA timeout), every child including `wiki2trec.py` dies with it. For long rebuilds (corpus refresh, ~6h), drive `setup.sh` from `systemd-run` so it runs as a detached service:
+
+```
+ssh deploy@$VPS
+sudo rm /mnt/wikipedia-source/enwiki_top1m.trec  # forces wiki2trec to re-run
+sudo systemd-run --unit=rebuild bash -c \
+  'rm /mnt/wikipedia-source/enwiki_top1m.trec && bash /opt/zettair-search/deploy/setup.sh'
+journalctl -fu rebuild  # follow progress (safe to Ctrl-C; rebuild keeps running)
+```
+
+To check on it later:
+```
+systemctl status rebuild --no-pager
+ps aux | grep -E 'wiki2trec|setup.sh' | grep -v grep
+sudo ls -la /mnt/wikipedia-source/enwiki_top1m.trec  # size growing = working
+```
+
+`wiki2trec.py` does not heartbeat to stdout while it streams the bz2, so silence on the journal during the ~6h step is normal. The downstream cascade (index, click_prior, docstore, reading sidecar, titles sidecar) all log normally once wiki2trec finishes.
 
 ---
 
@@ -297,6 +335,9 @@ These cadences are deliberately faster than the original PRD-020/021 defaults (w
 
 Append-only. Each entry: date, symptom, root cause, fix.
 
+- **2026-06-09 — related-rail vanished on punctuated titles**. Clicking the `George W. Bush` related-entity link on a Putin search ran a new search whose top result had docno `George_W__Bush` (safe_id form — punctuation collapses to `_`), but the related store was built with URL-slug docnos (`George_W._Bush`). Lookup missed, rail was empty. Fix: server falls back to deriving the URL-slug from `_urls_store` when the safe_id lookup misses (commit `88bc721`). Permanent fix tracked in PRD-032: rebuild related store with safe_id keys at next corpus rebuild.
+- **2026-06-05 — Putin lede lost to grandfather-cook fragment**. The Vladimir Putin snippet for query `vladimir putin` led with "His grandfather, Spiridon Putin, was a personal cook to Vladimir Lenin and Joseph Stalin." instead of the lede. Two compounding issues: (1) `wiki2trec.py`'s `clean()` collapsed paragraph structure, so the docstore was a single line and the summariser had no notion of lede; (2) lede density (~0.065) loses to short hit-dense fragments. Fix: PRD-030 step E (paragraph-preserving `clean()` in zettair), step F (inverse-log positional boost in `summarise.py`, `LEAD_WEIGHT=1.2`), step G (lede bonus on first-eligible fragment, `LEDE_BONUS=3.0`). Step E needed a fresh corpus rebuild on prod to take effect.
+- **2026-06-05 — GHA deploy `client_loop: send disconnect: Broken pipe` mid-`zet -i`**. Long index rebuilds (~10 min) exceeded the sshd idle timeout on the GHA runner. Fix: added SSH keepalives (`ServerAliveInterval=30`, `ServerAliveCountMax=120`, `TCPKeepAlive=yes`) in `.github/workflows/deploy.yml` (PR #18). Covers ~60 min of silence before the client gives up.
 - **2026-05-25 — pageview dumps stalled ~62 h (Wikimedia)**. Wikimedia stopped publishing hourly pageview dumps for ~62 h. Our trending pipeline cleanly logged "no dump available in the last 12h — exiting cleanly"; nothing to fix on our side. Lookback widened from 12 h to 96 h so that post-outage runs auto-catch-up. UI added a stale-rail fade (`opacity 0.55`) and "(N h ago)" label when `generated_at > 24 h`.
 - **2026-05-24 — `/img` returned same bytes regardless of width (iOS)**. My 2026-05-22 fix for the Wikimedia thumb allowlist rewrote *every* `/{N}px-/` to `/250px-/`. Now: allowed widths pass through; only non-allowed coerce to the smallest allowed ≥ requested. Also added `image_url` to `/api/trending` so iOS doesn't need N parallel `/search?n=1` calls per home view.
 - **2026-05-22 — Wikimedia tightened thumb-size allowlist**. Existing image-store URLs (`/300px-/`) started returning HTTP 400. Introduced `_rewrite_thumb_size` in the proxy.
@@ -519,3 +560,6 @@ Design decisions are recorded in `prd/`. Reading order if you're new to the code
 | PRD-026 | News-rail quality — strict filter + Google + Wikipedia ITN | Live |
 | PRD-027 | Reading time + difficulty signal (Harvey ball) | Live |
 | PRD-028 | iOS app — native client with system integration | Draft; **see handoff log at bottom of the PRD for current asks** |
+| PRD-030 | Snippet quality — apostrophes, sentence boundaries, list junk, lede selection | Live (steps A-G shipped — see the addendum at the end of the PRD for the layered fixes: paragraph-preserving clean(), inverse-log positional boost, lede bonus) |
+| PRD-031 | Titles sidecar — canonical Wikipedia display titles per docno (replaces URL-parsing hack) | Live |
+| PRD-032 | Catalogue of unbuilt features — single index pointing back at the source PRDs for every open follow-up | Living document |
