@@ -793,6 +793,7 @@ async def search(
     qn = query_norm(q)
     summary = None
     summary_kind = None
+    summary_source = None
     event_date = None
     spike_meta = _trending_spike_meta(qn)
     if spike_meta is not None:
@@ -801,11 +802,20 @@ async def search(
             summary = news
             summary_kind = "news"
             event_date = spike_meta.get("event_date")
+            # PR #33: when the gate swapped a stale wiki paragraph for
+            # Google News headline synthesis, event_source on the
+            # trending item is "news_rss". Map both forms to consumer-
+            # friendly names the frontend renders as attribution lines.
+            # Grace-window path (Path 2 in _trending_spike_meta) carries
+            # no event_source — default to wikipedia (the common case).
+            es = spike_meta.get("event_source")
+            summary_source = "google_news" if es == "news_rss" else "wikipedia"
     if summary is None:
         bio = _summaries_store.get(qn)
         if bio:
             summary = bio
             summary_kind = "biographical"
+            summary_source = "wikipedia"
 
     response = {
         "query": q,
@@ -818,6 +828,11 @@ async def search(
     if summary:
         response["summary"] = summary
         response["summary_kind"] = summary_kind
+        # PRD-018/021 attribution: summary_source tells the frontend
+        # whether the LLM was fed Wikipedia prose or a Google News
+        # headline synthesis, so the panel footer can attribute
+        # honestly. Additive field — iOS PRD-028 stays stable.
+        response["summary_source"] = summary_source
         if event_date:
             response["event_date"] = event_date
 
