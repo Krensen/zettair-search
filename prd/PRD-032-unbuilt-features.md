@@ -103,6 +103,7 @@ the PRD itself is the spec.
 |---|---|---|
 | iOS app v1 | PRD-028 | ~5 weeks effort; "server-side handoff log" at bottom of the PRD is the running ask list. |
 | News timeline / `/news` page | PRD-029 | ~8-11 days; soft-launch path proposed. |
+| Front-of-search cache, backend routing, sharding | PRD-033 | Four stages: in-process LRU cache (~1d), backend routing for zero-downtime rebuilds (~3-5d), Redis promotion (conditional), replication/sharding (conditional). Anchored to 2026-06-18 loadtest baseline of 15.5 req/s, p50 528ms. |
 
 ---
 

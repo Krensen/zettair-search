@@ -566,3 +566,4 @@ Design decisions are recorded in `prd/`. Reading order if you're new to the code
 | PRD-030 | Snippet quality — apostrophes, sentence boundaries, list junk, lede selection | Live (steps A-G shipped — see the addendum at the end of the PRD for the layered fixes: paragraph-preserving clean(), inverse-log positional boost, lede bonus) |
 | PRD-031 | Titles sidecar — canonical Wikipedia display titles per docno (replaces URL-parsing hack) | Live |
 | PRD-032 | Catalogue of unbuilt features — single index pointing back at the source PRDs for every open follow-up | Living document |
+| PRD-033 | Front-of-search cache, backend routing, replication, sharding — four stages of scaling work anchored to the 2026-06-18 loadtest baseline (15.5 req/s, p50 528 ms on prod localhost) | Draft |
