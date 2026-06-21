@@ -1,0 +1,189 @@
+<!--
+    Canonical copy lives in zettair-ios/deploy/PRIVACY_POLICY.md.
+    This file is the served copy: server.py /privacy renders it.
+    When updating, edit BOTH or move the canonical here. Keep the
+    `Last updated` date in sync.
+-->
+
+# Zettair Privacy Policy
+
+**Last updated:** 2026-06-21
+
+This policy describes what information the Zettair app and the
+zettair.io service collect, how it is used, and the choices you have.
+
+Zettair is built and operated by a single individual hobbyist (Hugh
+Williams). There is no company, no advertising network, and no third-
+party analytics. The goal of this policy is to be specific and
+complete rather than legally exhaustive.
+
+---
+
+## In one paragraph
+
+Zettair does not require an account. The app stores your search
+history, saved queries, and reading list **only on your device**. When
+you run a search, the query and your IP address are sent to the
+zettair.io server, where they are written to a query log along with a
+timestamp. The log is used to improve ranking and to debug. We do not
+sell or share this data with anyone. We do not use any third-party
+analytics or advertising SDKs.
+
+---
+
+## What the app stores on your device
+
+The Zettair iOS app keeps the following data **locally**, on your
+device, using Apple-standard storage (UserDefaults, file system, and
+Spotlight indexes):
+
+- Your **recent searches** and tappable suggestions, in memory and in
+  a small on-disk index for Apple's Spotlight system.
+- **Saved queries and reading list** (if you use the Saved tab).
+- A small **image cache** for thumbnails seen on the trending and
+  results screens.
+- The most recent **daily morning brief** content, so reopening the
+  app the same day is instant.
+- **AppIntents donations** to Siri / Shortcuts when you run a search —
+  this is Apple's own on-device mechanism for suggesting your past
+  actions back to you. It is not sent to us.
+
+None of this data is sent to any server. Uninstalling the app removes
+all of it.
+
+There is no iCloud sync of search history in the current release.
+A future release may add optional iCloud sync of the Saved tab; if so,
+this policy will be updated and the sync will be opt-in.
+
+---
+
+## What the zettair.io server receives
+
+When you run a search, tap a result, or load the trending list, the
+Zettair app makes a network request to `https://zettair.io`. The
+server receives:
+
+- The **query string** you typed (for `/search` and `/suggest`).
+- The **result you tapped** and its rank (for `/click`).
+- Your **IP address**, as is true of every HTTPS request you make
+  anywhere on the internet.
+- The **User-Agent** header your device sends. The app sets this to
+  `ZettairIOS/<version>` so app traffic can be distinguished from web
+  traffic in our debugging.
+- A **request timestamp**.
+
+The server writes a record of each request to a local log file:
+
+- `queries.jsonl` — query string, IP, timestamp, result count, latency.
+- `clicks.jsonl` — query string, IP, timestamp, which result was tapped.
+
+These logs live on a single Hetzner virtual server in Germany. They
+are used to:
+
+- Tune search ranking (which results people actually click).
+- Improve autosuggestions (which queries are common).
+- Surface what's trending and timely.
+- Debug performance and outages.
+
+The logs are not linked to any account or device identifier — there is
+no account. The same IP address may show up multiple times, but Zettair
+does not maintain a profile against it, does not attempt to identify
+who is behind it, and does not share it with anyone.
+
+We do not use cookies. We do not set any tracking identifiers. We do
+not run any analytics SDK (Google Analytics, Firebase, Mixpanel, etc.)
+either in the app or on the server.
+
+---
+
+## What we do not collect
+
+To be specific:
+
+- **No account information.** There is no sign-up, no login, no email
+  collection.
+- **No advertising identifier** (IDFA) is requested. Apple's App
+  Tracking Transparency prompt is not shown because there is nothing
+  to track.
+- **No contacts, photos, location, microphone, or camera access.**
+  The app does not ask for any of these permissions.
+- **No notifications** unless you opt in to the daily morning brief in
+  Settings. The notification is scheduled locally on your device by
+  iOS; nothing is sent to a remote push service.
+- **No third-party analytics or crash reporting SDK.** Apple's own
+  crash reports may be sent to Apple if you have opted into "Share
+  with App Developers" in iOS Settings; we receive only aggregated
+  Apple-mediated crash data and never raw device information.
+
+---
+
+## Search content and external services
+
+Search results, summaries, and trending items are derived from public
+sources:
+
+- The text body of articles is from the **English Wikipedia** under
+  the CC BY-SA license. The app credits Wikipedia on every result and
+  links to the source article.
+- Some news-flavoured summaries are generated by a language model
+  from **Google News** headlines. The knowledge panel labels these
+  explicitly ("Summary generated by an LLM from Google News
+  headlines").
+- Article thumbnails are served by **Wikimedia**'s content network.
+
+Tapping the source link or the Wikipedia attribution in the app opens
+those sites in Safari. Your interaction with them is governed by
+their privacy policies, not this one.
+
+---
+
+## Data retention
+
+Server-side query and click logs are retained on the server's disk
+until manually rotated. There is no automated retention policy yet.
+The logs do not grow particularly fast — typical traffic is in the
+tens of thousands of queries per month.
+
+You can request deletion of the log entries associated with your IP
+address by emailing the contact below. Because there is no account
+linking, we cannot guarantee identifying every entry that came from
+you specifically, but we can delete all entries from a given IP.
+
+---
+
+## Children
+
+Zettair is a general-audience reference search tool and is not
+directed at children under 13. We do not knowingly collect data from
+children. The app does not include in-app purchases, advertising, or
+social features.
+
+---
+
+## Changes to this policy
+
+If this policy changes, the "Last updated" date at the top will
+change and the change will be summarised at the bottom of the
+zettair.io privacy page. If you are using an older app version that
+predated a policy change, the change still applies — there is no way
+to opt into the old terms.
+
+---
+
+## Contact
+
+Questions or deletion requests: **hugh@zettair.io**
+
+The source code for the iOS app and the server is published openly:
+
+- App: <https://github.com/Krensen/zettair-ios>
+- Server: <https://github.com/Krensen/zettair-search>
+
+If you are technically inclined, you can verify the claims in this
+policy against the code itself. Specifically:
+
+- Server-side logging: `server.py:_append_log`, called from `/search`
+  and `/click` handlers.
+- Client storage: `ZettairKit/Sources/ZettairKit/`.
+- No third-party SDKs: see `project.yml` packages list and
+  `ZettairKit/Package.swift` dependencies — they are empty.
