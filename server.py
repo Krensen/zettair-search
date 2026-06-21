@@ -1638,6 +1638,193 @@ async def api_events_day(ev_date: str):
     }
 
 
+# PRD-028 / App Store M12: public privacy policy required by App Store
+# Connect at submission time. Source of truth for the policy text lives
+# in zettair-ios/deploy/PRIVACY_POLICY.md (the iOS repo is where Apple-
+# facing deliverables live); a synced copy is kept here as
+# PRIVACY_POLICY.md at the repo root. When updating, edit both.
+PRIVACY_POLICY_PATH = os.environ.get(
+    "ZET_PRIVACY_POLICY",
+    os.path.join(os.path.dirname(__file__), "PRIVACY_POLICY.md"),
+)
+_privacy_html_cache: dict = {"mtime": 0.0, "html": ""}
+
+
+def _render_markdown_min(md: str) -> str:
+    """Tiny dependency-free markdown renderer. Handles the subset used
+    by PRIVACY_POLICY.md: ATX headings, paragraphs, bullets, bold,
+    inline code, horizontal rules, links, HTML comments. Not a full
+    CommonMark implementation; we choose what the policy file uses
+    and reject anything more ambitious."""
+    lines = md.splitlines()
+    out: list[str] = []
+    in_list = False
+    in_paragraph: list[str] = []
+
+    def flush_paragraph():
+        if in_paragraph:
+            text = " ".join(in_paragraph).strip()
+            if text:
+                out.append(f"<p>{_apply_inline(text)}</p>")
+            in_paragraph.clear()
+
+    def close_list():
+        nonlocal in_list
+        if in_list:
+            out.append("</ul>")
+            in_list = False
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        # Strip HTML comments (single- or multi-line)
+        if stripped.startswith("<!--"):
+            flush_paragraph(); close_list()
+            while i < len(lines) and "-->" not in lines[i]:
+                i += 1
+            i += 1
+            continue
+        if not stripped:
+            flush_paragraph()
+            close_list()
+            i += 1
+            continue
+        if stripped == "---":
+            flush_paragraph(); close_list()
+            out.append("<hr>")
+            i += 1
+            continue
+        if stripped.startswith("# "):
+            flush_paragraph(); close_list()
+            out.append(f"<h1>{_apply_inline(stripped[2:])}</h1>")
+            i += 1
+            continue
+        if stripped.startswith("## "):
+            flush_paragraph(); close_list()
+            out.append(f"<h2>{_apply_inline(stripped[3:])}</h2>")
+            i += 1
+            continue
+        if stripped.startswith("### "):
+            flush_paragraph(); close_list()
+            out.append(f"<h3>{_apply_inline(stripped[4:])}</h3>")
+            i += 1
+            continue
+        if stripped.startswith("- ") or stripped.startswith("* "):
+            flush_paragraph()
+            if not in_list:
+                out.append("<ul>")
+                in_list = True
+            # Greedy collect continuation lines into this <li>.
+            li_text = stripped[2:]
+            j = i + 1
+            while j < len(lines):
+                nxt = lines[j].rstrip()
+                if not nxt.strip():
+                    break
+                nxt_strip = nxt.strip()
+                if (nxt_strip.startswith("- ") or nxt_strip.startswith("* ")
+                        or nxt_strip.startswith("#")
+                        or nxt_strip == "---"):
+                    break
+                li_text += " " + nxt_strip
+                j += 1
+            out.append(f"<li>{_apply_inline(li_text)}</li>")
+            i = j
+            continue
+        # Normal prose line — accumulate into the current paragraph.
+        in_paragraph.append(stripped)
+        i += 1
+    flush_paragraph()
+    close_list()
+    return "\n".join(out)
+
+
+_RE_BOLD = re.compile(r"\*\*([^*]+)\*\*")
+_RE_CODE = re.compile(r"`([^`]+)`")
+_RE_LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+_RE_AUTOLINK = re.compile(r"<(https?://[^>]+)>")
+
+
+def _apply_inline(text: str) -> str:
+    """Inline replacements for the markdown renderer. Order matters:
+    escape HTML first, then apply formatting (which produces tags)."""
+    # Escape HTML
+    text = (text.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;"))
+    # Autolinks <https://...> -> Wikipedia-style. The escape above turns
+    # < and > into entities, so match against those now.
+    text = re.sub(r"&lt;(https?://[^&]+)&gt;",
+                  r'<a href="\1">\1</a>', text)
+    # [text](url)
+    text = _RE_LINK.sub(r'<a href="\2">\1</a>', text)
+    # `inline code`
+    text = _RE_CODE.sub(r"<code>\1</code>", text)
+    # **bold**
+    text = _RE_BOLD.sub(r"<strong>\1</strong>", text)
+    return text
+
+
+def _privacy_html() -> str:
+    """Read PRIVACY_POLICY.md and render to a self-contained HTML page.
+    Cached by mtime so disk reads are amortised; reread automatically
+    when the file changes."""
+    try:
+        st = os.stat(PRIVACY_POLICY_PATH)
+    except FileNotFoundError:
+        return ""
+    if st.st_mtime == _privacy_html_cache["mtime"]:
+        return _privacy_html_cache["html"]
+    with open(PRIVACY_POLICY_PATH, encoding="utf-8") as f:
+        md = f.read()
+    body = _render_markdown_min(md)
+    page = (
+        "<!doctype html>"
+        '<html lang="en">'
+        '<head>'
+        '<meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<title>Privacy Policy — Zettair</title>'
+        '<style>'
+        'body{max-width:720px;margin:0 auto;padding:32px 24px 64px;'
+        'font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",'
+        'Roboto,Helvetica,Arial,sans-serif;color:#202124;}'
+        'h1{font-size:1.7rem;font-weight:600;margin:0 0 8px;}'
+        'h2{font-size:1.15rem;font-weight:600;margin:32px 0 6px;}'
+        'h3{font-size:0.95rem;font-weight:600;margin:22px 0 4px;'
+        'color:#3c4043;}'
+        'p{margin:0 0 12px;}ul{margin:0 0 12px;padding-left:1.4rem;}'
+        'li{margin:4px 0;}strong{font-weight:600;}'
+        'hr{border:0;border-top:1px solid #e8eaed;margin:28px 0;}'
+        'a{color:#1a73e8;text-decoration:underline;}'
+        'code{font:0.9em ui-monospace,"SF Mono",Menlo,monospace;'
+        'background:#f1f3f4;padding:1px 5px;border-radius:4px;}'
+        '.kicker{font-size:0.78rem;color:#80868b;'
+        'text-transform:uppercase;letter-spacing:0.05em;margin:0 0 4px;}'
+        '</style>'
+        '</head>'
+        '<body>'
+        '<p class="kicker"><a href="/">← zettair.io</a></p>'
+        f"{body}"
+        '</body>'
+        '</html>'
+    )
+    _privacy_html_cache["mtime"] = st.st_mtime
+    _privacy_html_cache["html"] = page
+    return page
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy():
+    """Public privacy policy. Required by App Store Connect (PRD-028
+    M12). Reads PRIVACY_POLICY.md from disk; cached by mtime."""
+    html = _privacy_html()
+    if not html:
+        return HTMLResponse("Privacy policy not configured.", status_code=503)
+    return html
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return _index_html
